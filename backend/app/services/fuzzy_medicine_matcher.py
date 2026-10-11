@@ -36,17 +36,15 @@ def clean_medicine_token(text: Optional[str]) -> str:
     expanded_tokens = [COMMON_ABBREVIATIONS.get(tok.strip(".,;:"), tok) for tok in tokens]
     t = " ".join(expanded_tokens)
     
-    # 2. Fix common OCR confusions
-    t = re.sub(r'([a-z]+)b(\d+)', r'\1 6\2', t)
-    t = re.sub(r'([a-z]+)(\d+)', r'\1 \2', t)
-    t = t.replace("0", "o").replace("1", "l").replace("rn", "m").replace("vv", "w")
-    
-    # 3. Strip dosage forms
+    # 2. Strip dosage forms
     t = re.sub(r'\b(tab|tablets?|caps?|capsules?|syps?|syrups?|inj|injections?|drops?|ointments?|creams?|suspensions?|gels?|solutions?|iv|im|po)\b', ' ', t)
     
-    # 4. Strip strength units and quantities (e.g. 650mg, 40 mg, 500 mcg, 0.5%)
+    # 3. Strip strength units and numbers (e.g. 81mg, 81 mg, 650mg, 40 mg, 500 mcg, 0.5%)
     t = re.sub(r'\b\d+(\.\d+)?\s*(mg|gm|mcg|ml|g|iu|%|tablets?|tabs?)\b', ' ', t)
     t = re.sub(r'\b\d+\b', ' ', t)
+    
+    # 4. Fix common OCR confusions on alphabetical medicine tokens
+    t = t.replace("rn", "m").replace("vv", "w")
     
     # 5. Remove punctuation
     t = re.sub(r'[^a-z\s]', ' ', t)
@@ -90,6 +88,32 @@ def match_extracted_medicine(
     clean_brand = clean_medicine_token(brand_name)
     clean_generic = clean_medicine_token(generic_name)
 
+    # Guard against pure digits, list indices (e.g. '2'), or empty tokens
+    raw_str = (raw_name or "").strip()
+    brand_str = (brand_name or "").strip()
+    if (raw_str.isdigit() or brand_str.isdigit() or (not clean_raw and not clean_brand and not clean_generic)):
+        return {
+            "name_as_written": raw_name or "Medication",
+            "brand_name": raw_name or "Unverified Item",
+            "generic_name": None,
+            "strength": strength or "Standard dose",
+            "form": form or "Tablet",
+            "dosage_pattern": extracted_item.get("dosage_pattern"),
+            "duration_days": extracted_item.get("duration_days"),
+            "quantity": quantity,
+            "confidence": 0.20,
+            "matched_medicine_id": None,
+            "matched_brand_name": None,
+            "matched_generic_name": None,
+            "match_score": 0.0,
+            "is_verified": False,
+            "cost_branded": None,
+            "cost_jan_aushadhi": None,
+            "generic_alternative": None,
+            "source": "Unverified in statutory database",
+            "alternatives": []
+        }
+
     candidates: List[Tuple[float, Dict[str, Any], str]] = []
 
     for med in MEDICINE_DATABASE:
@@ -128,6 +152,9 @@ def match_extracted_medicine(
     top_score = top_match[0] if top_match else 0.0
     top_med = top_match[1] if top_match else None
 
+    # Strict verification threshold: >= 0.70 similarity
+    is_verified = (top_med is not None) and (top_score >= 0.70)
+
     # Gather up to 2 alternatives
     alternatives = []
     if len(candidates) > 1:
@@ -144,37 +171,35 @@ def match_extracted_medicine(
                 "generic_alternative": alt_med["generic_alternative"]
             })
 
-    # Calculate pricing if top match exists
+    # Calculate pricing only if verified
     cost_branded = None
     cost_jan_aushadhi = None
-    if top_med:
+    if top_med and is_verified:
         if top_med.get("mrp_branded") and top_med.get("pack_size"):
             cost_branded = round((top_med["mrp_branded"] / top_med["pack_size"]) * quantity, 2)
         else:
             cost_branded = round(top_med.get("nppa_ceiling_per_unit", 0.0) * quantity, 2)
         cost_jan_aushadhi = round(top_med.get("jan_aushadhi_per_unit", 0.0) * quantity, 2)
 
-    is_verified = (top_med is not None) and (top_score >= 0.70)
-
     return {
         "name_as_written": raw_name or (top_med["brand_name"] if top_med else "Medication"),
-        "brand_name": top_med["brand_name"] if top_med else brand_name,
-        "generic_name": top_med["generic_name"] if top_med else (generic_name or "Unverified Salt"),
-        "strength": strength or (top_med["strength"] if top_med else "Standard dose"),
-        "form": top_med["formulation"] if top_med else (form or "Tablet"),
+        "brand_name": (top_med["brand_name"] if (top_med and is_verified) else brand_name),
+        "generic_name": (top_med["generic_name"] if (top_med and is_verified) else (generic_name or None)),
+        "strength": strength or (top_med["strength"] if (top_med and is_verified) else "Standard dose"),
+        "form": (top_med["formulation"] if (top_med and is_verified) else (form or "Tablet")),
         "dosage_pattern": extracted_item.get("dosage_pattern"),
         "duration_days": extracted_item.get("duration_days"),
         "quantity": quantity,
-        "confidence": round(confidence, 2),
+        "confidence": round(top_score if is_verified else min(confidence, 0.50), 2),
         # Matched details
-        "matched_medicine_id": top_med["id"] if top_med else None,
-        "matched_brand_name": top_med["brand_name"] if top_med else None,
-        "matched_generic_name": top_med["generic_name"] if top_med else None,
+        "matched_medicine_id": top_med["id"] if (top_med and is_verified) else None,
+        "matched_brand_name": top_med["brand_name"] if (top_med and is_verified) else None,
+        "matched_generic_name": top_med["generic_name"] if (top_med and is_verified) else None,
         "match_score": round(top_score, 2),
         "is_verified": is_verified,
         "cost_branded": cost_branded,
         "cost_jan_aushadhi": cost_jan_aushadhi,
-        "generic_alternative": top_med["generic_alternative"] if top_med else None,
-        "source": top_med["source"] if top_med else "Unverified in statutory database",
+        "generic_alternative": top_med["generic_alternative"] if (top_med and is_verified) else None,
+        "source": top_med["source"] if (top_med and is_verified) else "Unverified in statutory database",
         "alternatives": alternatives
     }

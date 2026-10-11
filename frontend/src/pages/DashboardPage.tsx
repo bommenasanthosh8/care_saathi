@@ -195,25 +195,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     return null;
   };
 
-  // Initial load
-  useEffect(() => {
-    if (searchState.treatmentName) {
-      loadDataForJourney(searchState.treatmentId, searchState.treatmentName, searchState.city, searchState.locality);
-    }
-  }, []);
+  // Request sequence ref to prevent out-of-order response overwrites
+  const requestSeqRef = React.useRef(0);
 
-  const loadDataForJourney = async (
+  const loadDataForJourney = React.useCallback(async (
     tId: string, 
     tName: string, 
     cityName: string, 
     localityName: string
   ) => {
+    const currentSeq = ++requestSeqRef.current;
     setIsLoading(true);
     setSearchError(null);
 
     try {
       // 1. NLP Parse & Emergency Check
       const nlp = await api.parseNLP(tName, localityName || cityName);
+      if (currentSeq !== requestSeqRef.current) return;
       if (nlp) {
         setNlpResult(nlp);
         if (nlp.emergency_detected) {
@@ -225,14 +223,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       }
 
       // 2. Cost Estimation across All Categories
-      const cost = await api.estimateCost({
-        treatment: tName,
-        city: cityName,
-        locality: localityName,
-        annual_income: annualIncome,
-        ration_card_type: rationCardType
-      });
-      setCostResult(cost);
+      try {
+        const cost = await api.estimateCost({
+          treatment: tName,
+          city: cityName,
+          locality: localityName,
+          annual_income: annualIncome,
+          ration_card_type: rationCardType
+        });
+        if (currentSeq !== requestSeqRef.current) return;
+        setCostResult(cost);
+      } catch (costErr: any) {
+        console.warn("Cost estimation unavailable for treatment:", tName, costErr);
+        if (currentSeq === requestSeqRef.current) {
+          setCostResult(null);
+        }
+      }
 
       // 3. Hospital Recommendations
       const facs = await api.getFacilities({
@@ -246,6 +252,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         lat: coords?.lat,
         lng: coords?.lng
       });
+      if (currentSeq !== requestSeqRef.current) return;
       setFacilities(facs);
 
       // 4. Government Schemes & Insurance
@@ -256,9 +263,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         annual_income: annualIncome,
         ration_card_type: rationCardType
       });
+      if (currentSeq !== requestSeqRef.current) return;
       setSchemes(matched);
 
     } catch (err: any) {
+      if (currentSeq !== requestSeqRef.current) return;
       console.error("Care journey load failed", err);
       setSearchError(
         err?.message?.includes('Failed to fetch') || err?.message?.includes('NetworkError')
@@ -266,9 +275,41 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           : (err?.message || 'Failed to load journey data. Please try again.')
       );
     } finally {
-      setIsLoading(false);
+      if (currentSeq === requestSeqRef.current) {
+        setIsLoading(false);
+      }
     }
-  };
+  }, [
+    annualIncome,
+    rationCardType,
+    hospitalSortBy,
+    hospitalCategoryFilter,
+    schemeSupportFilter,
+    treatmentAvailableOnly,
+    coords?.lat,
+    coords?.lng,
+    selectedState,
+    searchState.state,
+    onTriggerEmergency
+  ]);
+
+  // Reactive data loading effect on searchState change
+  useEffect(() => {
+    if (searchState.treatmentName) {
+      loadDataForJourney(
+        searchState.treatmentId, 
+        searchState.treatmentName, 
+        searchState.city, 
+        searchState.locality
+      );
+    }
+  }, [
+    searchState.treatmentId, 
+    searchState.treatmentName, 
+    searchState.city, 
+    searchState.locality,
+    loadDataForJourney
+  ]);
 
   // Step 1: Handle Selection
   const handleSelectProcedure = (proc: { id: string; name: string }) => {

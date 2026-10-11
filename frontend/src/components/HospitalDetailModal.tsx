@@ -29,14 +29,19 @@ interface HospitalDetailModalProps {
   onBookAppointment?: (facility: FacilityDTO) => void;
 }
 
-export const HospitalDetailModal: React.FC<HospitalDetailModalProps> = ({
+interface HospitalDetailModalContentProps {
+  facility: FacilityDTO;
+  onClose: () => void;
+  onEstimateHere: (facility: FacilityDTO) => void;
+  onBookAppointment?: (facility: FacilityDTO) => void;
+}
+
+const HospitalDetailModalContent: React.FC<HospitalDetailModalContentProps> = ({
   facility,
   onClose,
   onEstimateHere,
   onBookAppointment
 }) => {
-  if (!facility) return null;
-
   const { searchState, addToComparison, removeFromComparison } = useSearch();
   const [imageError, setImageError] = useState(false);
   const [activePhotoIdx, setActivePhotoIdx] = useState<number>(0);
@@ -430,3 +435,12 @@ export const HospitalDetailModal: React.FC<HospitalDetailModalProps> = ({
     </div>
   );
 };
+
+export const HospitalDetailModal: React.FC<HospitalDetailModalProps> = ({
+  facility,
+  ...props
+}) => {
+  if (!facility) return null;
+  return <HospitalDetailModalContent {...props} facility={facility} />;
+};
+

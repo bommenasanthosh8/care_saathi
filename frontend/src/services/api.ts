@@ -296,6 +296,9 @@ export interface PrescriptionOCRDTO {
   date?: string | null;
   unreadable_parts?: string[];
   source?: string;
+  canonical_treatment_id?: string | null;
+  canonical_treatment_name?: string | null;
+  available_treatment_matches?: Array<{ id: string; name: string }>;
 }
 
 export interface SpeechTranscribeDTO {
@@ -566,6 +569,10 @@ export const api = {
       method: 'POST',
       body: formData
     });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Prescription analysis failed' }));
+      throw new Error(err.detail || 'Prescription analysis failed');
+    }
     return res.json();
   },
 
@@ -705,6 +712,8 @@ export const api = {
     city: string;
     state: string;
     district: string;
+    locality?: string;
+    pin_code?: string | null;
     tier: string;
     tier_label: string;
     cost_multiplier: number;
@@ -738,15 +747,44 @@ export const api = {
     return res.json();
   },
 
+  async sendOtp(phone: string): Promise<{ success: boolean; is_demo?: boolean; demo_otp_hint?: string; message: string }> {
+    const res = await fetch(`${API_BASE}/auth/otp/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to send OTP' }));
+      throw new Error(err.detail || 'Failed to send OTP');
+    }
+    return res.json();
+  },
+
+  async verifyOtp(phone: string, otpCode: string): Promise<{ verified: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/auth/otp/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, otp_code: otpCode })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'OTP verification failed' }));
+      throw new Error(err.detail || 'OTP verification failed');
+    }
+    return res.json();
+  },
+
   async createPaymentOrder(params: {
     appointment_id: string;
     facility_name: string;
     consultation_fee?: number;
     registration_fee?: number;
-  }): Promise<{ success: boolean; order: PaymentOrderDTO }> {
+  }, token?: string): Promise<{ success: boolean; order: PaymentOrderDTO }> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE}/payments/create-order`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(params)
     });
     if (!res.ok) {
@@ -761,10 +799,13 @@ export const api = {
     payment_id: string;
     signature?: string;
     client_status?: string;
-  }): Promise<PaymentVerificationResultDTO> {
+  }, token?: string): Promise<PaymentVerificationResultDTO> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE}/payments/verify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(params)
     });
     if (!res.ok) {
@@ -774,8 +815,11 @@ export const api = {
     return res.json();
   },
 
-  async getPaymentStatus(orderId: string): Promise<PaymentOrderDTO> {
-    const res = await fetch(`${API_BASE}/payments/status/${orderId}`);
+  async getPaymentStatus(orderId: string, token?: string): Promise<PaymentOrderDTO> {
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${API_BASE}/payments/status/${orderId}`, { headers });
     if (!res.ok) throw new Error("Failed to fetch payment status");
     return res.json();
   },
@@ -840,8 +884,68 @@ export const api = {
     });
     if (!res.ok) throw new Error("Failed to geocode address");
     return res.json();
+  },
+
+  // --- Health Card & Insurance Hospital Finder Methods ---
+  async getHealthCardSchemes(): Promise<HealthCardSchemeDTO[]> {
+    const res = await fetch(`${API_BASE}/health-cards/schemes`);
+    if (!res.ok) throw new Error("Failed to load health card schemes");
+    return res.json();
+  },
+
+  async getHealthCardTreatments(query?: string): Promise<any[]> {
+    const url = query ? `${API_BASE}/health-cards/treatments?q=${encodeURIComponent(query)}` : `${API_BASE}/health-cards/treatments`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("Failed to load treatments catalogue");
+    return res.json();
+  },
+
+  async searchHealthCardHospitals(req: HealthCardSearchRequest): Promise<HealthCardSearchResponse> {
+    const payload = {
+      ...req,
+      city: req.city || req.city_or_district,
+      city_or_district: req.city_or_district || req.city
+    };
+    const res = await fetch(`${API_BASE}/health-cards/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to search hospitals for health card' }));
+      throw new Error(err.detail || 'Health card hospital search failed');
+    }
+    return res.json();
+  },
+
+  async getHospitalHealthCardProfile(facilityId: string, schemeId?: string, treatmentId?: string): Promise<HospitalHealthCardProfileResponse> {
+    const params = new URLSearchParams();
+    if (schemeId) params.append('scheme_id', schemeId);
+    if (treatmentId) params.append('treatment_id', treatmentId);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await fetch(`${API_BASE}/health-cards/hospital/${facilityId}${qs}`);
+    if (!res.ok) throw new Error("Failed to load hospital health card profile");
+    return res.json();
+  },
+
+  async updateAdminEmpanelment(data: AdminEmpanelmentUpdateRequest, token: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/health-cards/admin/empanelment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update empanelment' }));
+      throw new Error(err.detail || 'Empanelment update failed');
+    }
+    return res.json();
   }
 };
+
+export const careSaathiApi = api;
 
 // Phase 3 DTOs
 export interface UserProfileDTO {
@@ -921,6 +1025,9 @@ export interface MedicineCourseEstimateDTO {
   potential_savings_percentage: number;
   price_source_disclaimer: string;
   has_unverified_items: boolean;
+  verified_items_count?: number;
+  unverified_items_count?: number;
+  unverified_items_excluded_from_total?: boolean;
 }
 
 export interface PaymentFeeBreakdownDTO {
@@ -955,4 +1062,133 @@ export interface PaymentVerificationResultDTO {
   message?: string;
   error?: string;
 }
+
+// Health Card & Scheme DTOs (Phase 6)
+export interface HealthCardSchemeDTO {
+  id: string;
+  name: string;
+  short_code: string;
+  category: 'government' | 'state_government' | 'employer' | 'private_insurance';
+  description: string;
+  state_applicability: string;
+  official_portal_url?: string;
+  helpline_number?: string;
+  cashless_mode: string;
+  max_coverage_inr?: number;
+  eligibility_summary: string;
+  verification_doc_needed: string;
+}
+
+export interface HealthCardPackageDTO {
+  id: string;
+  scheme_id: string;
+  treatment_id: string;
+  package_code: string;
+  package_name: string;
+  specialty: string;
+  statutory_rate_inr: number;
+  covered_days?: number;
+  includes_implants?: boolean;
+  exclusions_summary?: string;
+  pre_auth_required: boolean;
+  source_name: string;
+  source_url?: string;
+}
+
+export interface HealthCardSearchRequest {
+  scheme_id: string;
+  treatment_id: string;
+  state?: string;
+  city_or_district?: string;
+  city?: string;
+  lat?: number;
+  lng?: number;
+  radius_km?: number;
+  ownership?: string;
+  verified_only?: boolean;
+}
+
+export interface HospitalHealthCardMatchDTO {
+  facility_id: string;
+  facility_name: string;
+  city: string;
+  state: string;
+  locality?: string;
+  district?: string;
+  address?: string;
+  phone?: string;
+  ownership: string;
+  distance_km?: number | null;
+  lat?: number;
+  lng?: number;
+  verification_status: 'verified_procedure' | 'scheme_verified_procedure_unconfirmed' | 'needs_confirmation' | 'not_matched';
+  verification_status_label: string;
+  verification_label?: string;
+  is_verified_procedure: boolean;
+  is_scheme_empanelled: boolean;
+  package_code?: string;
+  package_name?: string;
+  scheme_rate_inr?: number;
+  package_rate_inr?: number;
+  estimated_gross_cost_inr?: number;
+  estimated_scheme_coverage_inr?: number;
+  estimated_patient_out_of_pocket_inr?: number;
+  coverage_notes?: string;
+  cost_note?: string;
+  official_source_name?: string;
+  official_source_url?: string;
+  helpdesk_phone?: string;
+  last_verified?: string;
+}
+
+export interface HealthCardSearchResponse {
+  scheme: HealthCardSchemeDTO;
+  treatment: {
+    id: string;
+    name: string;
+    specialty: string;
+    description: string;
+    is_surgical: boolean;
+  };
+  package_info?: HealthCardPackageDTO | null;
+  total_results: number;
+  total_found?: number;
+  verified_procedure_count: number;
+  verified_count?: number;
+  scheme_empanelled_count: number;
+  results: HospitalHealthCardMatchDTO[];
+  hospitals?: HospitalHealthCardMatchDTO[];
+  disclaimer: string;
+}
+
+export interface HospitalHealthCardProfileResponse {
+  facility: FacilityDTO;
+  empanelments: Array<{
+    scheme_id: string;
+    scheme_name: string;
+    category: string;
+    empanelment_status: string;
+    official_source_name: string;
+    official_source_url?: string;
+    helpdesk_phone?: string;
+    last_verified?: string;
+  }>;
+  matching_package?: HealthCardPackageDTO | null;
+  verification_status: string;
+  verification_status_label: string;
+  pre_travel_checklist: string[];
+  helpline_number?: string;
+  official_portal_url?: string;
+}
+
+export interface AdminEmpanelmentUpdateRequest {
+  facility_id: string;
+  scheme_id: string;
+  empanelment_status: 'verified' | 'unconfirmed' | 'expired' | 'revoked';
+  official_source_name: string;
+  official_source_url?: string;
+  helpdesk_phone?: string;
+  notes?: string;
+}
+
 

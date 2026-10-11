@@ -5,8 +5,11 @@ import datetime
 import jwt
 from typing import Optional, Dict, Any, List
 from ..data.database import get_connection
+from ..config import settings
 
-JWT_SECRET = os.getenv("JWT_SECRET", "caresaathi-security-key-2026-vnr-hack-session")
+def get_jwt_secret() -> str:
+    return settings.JWT_SECRET
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 48
 
@@ -32,11 +35,11 @@ def create_access_token(user_id: str, email: str, name: str) -> str:
         "iat": now,
         "exp": now + datetime.timedelta(hours=JWT_EXPIRATION_HOURS)
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         return payload
     except Exception:
         return None

@@ -1,0 +1,11 @@
+{
+  "name": "caresaathi-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CareSaathi AI - Healthcare Cost & Care Navigator",
+  "scripts": {
+    "dev": "bun run ./scripts/dev.js",
+    "dev:backend": "cd backend && .venv\\Scripts\\python.exe -m uvicorn app.main:app --reload",
+    "dev:frontend": "cd frontend && bun run dev"
+  }
+}

@@ -9,15 +9,27 @@ from .photo_service import get_hospital_photo_metadata
 
 from ..data.india_geography import resolve_location, LOCATION_REGISTRY
 
-def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def haversine_distance(lat1: Optional[float], lon1: Optional[float], lat2: Optional[float], lon2: Optional[float]) -> Optional[float]:
     """
     Computes great-circle distance between two GPS coordinates in kilometers.
+    Returns None if any coordinate is missing, invalid, or out of valid bounds.
     """
+    if lat1 is None or lon1 is None or lat2 is None or lon2 is None:
+        return None
+    try:
+        f_lat1, f_lon1, f_lat2, f_lon2 = float(lat1), float(lon1), float(lat2), float(lon2)
+    except (TypeError, ValueError):
+        return None
+
+    if not (-90.0 <= f_lat1 <= 90.0 and -180.0 <= f_lon1 <= 180.0 and
+            -90.0 <= f_lat2 <= 90.0 and -180.0 <= f_lon2 <= 180.0):
+        return None
+
     R = 6371.0  # Earth radius in kilometers
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
+    dlat = math.radians(f_lat2 - f_lat1)
+    dlon = math.radians(f_lon2 - f_lon1)
     a = (math.sin(dlat / 2) ** 2 +
-         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+         math.cos(math.radians(f_lat1)) * math.cos(math.radians(f_lat2)) * math.sin(dlon / 2) ** 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 2)
 
@@ -132,7 +144,7 @@ def search_facilities(
                             (fac.locality and city_filter_term in fac.locality.lower()) or
                             (fac.locality and fac.locality.lower() in city_filter_term) or
                             city_filter_term in fac.state.lower() or
-                            (city_filter_term in ["secunderabad", "kukatpally", "gachibowli", "banjara hills", "madhapur", "kondapur", "hitec city"] and fac.city.lower() == "hyderabad"))
+                            (city_filter_term in ["secunderabad", "kukatpally", "gachibowli", "banjara hills", "madhapur", "kondapur", "hitec city", "nizampet", "miyapur", "bachupally"] and fac.city.lower() == "hyderabad"))
             if not matches_city:
                 continue
 
@@ -177,8 +189,9 @@ def search_facilities(
         fac.distance_km = haversine_distance(user_lat, user_lng, fac.lat, fac.lng)
 
         # Distance radius filter
-        if radius_km is not None and radius_km > 0 and fac.distance_km > radius_km:
-            continue
+        if radius_km is not None and radius_km > 0:
+            if fac.distance_km is None or fac.distance_km > radius_km:
+                continue
 
         # Estimate cost for this facility if treatment specified
         if treatment_obj:
@@ -250,7 +263,7 @@ def search_facilities(
     if sort_by in ["best_match", "rank"]:
         results.sort(key=lambda x: x.rank_score or 0, reverse=True)
     elif sort_by == "nearest":
-        results.sort(key=lambda x: x.distance_km if x.distance_km is not None else 9999)
+        results.sort(key=lambda x: (x.distance_km is None, x.distance_km if x.distance_km is not None else float('inf')))
     elif sort_by == "lowest_cost":
         results.sort(key=lambda x: x.estimated_cost_min if x.estimated_cost_min is not None else 9999999)
     elif sort_by == "rating":

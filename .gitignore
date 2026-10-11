@@ -1,9 +1,47 @@
+# Environment & Secrets
 .env
 .env.*
 !.env.example
+backend/.env
+frontend/.env
+*.pem
+*.key
+
+# Python
 __pycache__/
-node_modules/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
 venv/
 .venv/
+backend/.venv/
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.npm
+.eslintcache
+
+# Databases & local scratch
 caresaathi.db
+*.sqlite
+*.sqlite3
 scratch/
+
+# IDE, Agent & OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+.agent/
+.agents/
+.gemini/

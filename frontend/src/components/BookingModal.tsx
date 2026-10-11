@@ -2,11 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Check, 
-  Calendar, 
-  Clock, 
-  User, 
-  Phone, 
-  FileText, 
   Share2, 
   Download, 
   Navigation, 
@@ -15,7 +10,6 @@ import {
   CheckCircle2, 
   ChevronRight, 
   Info,
-  Sparkles,
   ArrowRight
 } from 'lucide-react';
 import { FacilityDTO, api, PaymentOrderDTO, PaymentVerificationResultDTO } from '../services/api';
@@ -40,17 +34,22 @@ const PURPOSES = [
   { id: 'Second opinion', label: 'Second Opinion & Tariff Review', icon: '📋' }
 ];
 
-export const BookingModal: React.FC<BookingModalProps> = ({
-  isOpen,
+interface BookingModalContentProps {
+  facility: FacilityDTO;
+  onClose: () => void;
+  onViewMyAppointments?: () => void;
+  matchedSchemeName?: string;
+  treatmentName?: string;
+}
+
+const BookingModalContent: React.FC<BookingModalContentProps> = ({
   facility,
   onClose,
   onViewMyAppointments,
   matchedSchemeName = 'Aarogyasri / PM-JAY',
   treatmentName
 }) => {
-  if (!isOpen || !facility) return null;
-
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { searchState } = useSearch();
   const { language } = useLanguage();
 
@@ -77,6 +76,10 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [otpSent, setOtpSent] = useState(false);
   const [otpVerified, setOtpVerified] = useState(Boolean(user));
   const [otpCode, setOtpCode] = useState('');
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState<boolean>(false);
+  const [demoOtpHint, setDemoOtpHint] = useState<string | null>(null);
   const [preferredLang, setPreferredLang] = useState(language || 'en');
   const [patientNote, setPatientNote] = useState('');
   const [shareSummary, setShareSummary] = useState(true);
@@ -103,7 +106,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         facility_name: facility.name,
         consultation_fee: 500,
         registration_fee: 100
-      });
+      }, token || undefined);
       if (res.success && res.order) {
         setPaymentOrder(res.order);
       }
@@ -123,7 +126,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         order_id: paymentOrder.order_id,
         payment_id: `pay_sandbox_${Date.now()}`,
         client_status: 'SUCCESS'
-      });
+      }, token || undefined);
       if (res.verified) {
         setPaymentStatus('SUCCESS');
         setPaymentResult(res);
@@ -169,19 +172,46 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   const selectedSlot = slots.find(s => s.id === selectedSlotId);
 
-  const handleSendOtp = () => {
-    if (patientPhone.trim().length >= 10) {
+  const handleSendOtp = async () => {
+    const cleanDigits = patientPhone.replace(/\D/g, '');
+    if (cleanDigits.length < 10) {
+      setOtpError('Please enter a valid 10-digit mobile number.');
+      return;
+    }
+    setIsSendingOtp(true);
+    setOtpError(null);
+    try {
+      const res = await api.sendOtp(patientPhone);
       setOtpSent(true);
-      // Auto-verify mock OTP in demo
-      setTimeout(() => {
-        setOtpCode('7829');
-      }, 500);
+      if (res.demo_otp_hint) {
+        setDemoOtpHint(res.demo_otp_hint);
+        setOtpCode(res.demo_otp_hint);
+      }
+    } catch (err: any) {
+      setOtpError(err.message || 'Failed to send verification code.');
+    } finally {
+      setIsSendingOtp(false);
     }
   };
 
-  const handleVerifyOtp = () => {
-    if (otpCode === '7829' || otpCode.length === 4) {
-      setOtpVerified(true);
+  const handleVerifyOtp = async () => {
+    if (!otpCode.trim()) {
+      setOtpError('Please enter the 4-digit verification code.');
+      return;
+    }
+    setIsVerifyingOtp(true);
+    setOtpError(null);
+    try {
+      const res = await api.verifyOtp(patientPhone, otpCode.trim());
+      if (res.verified) {
+        setOtpVerified(true);
+      } else {
+        setOtpError('Verification code was not accepted.');
+      }
+    } catch (err: any) {
+      setOtpError(err.message || 'Verification failed. Please check the code.');
+    } finally {
+      setIsVerifyingOtp(false);
     }
   };
 
@@ -882,37 +912,51 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       {!otpVerified && (
                         <button
                           type="button"
+                          disabled={isSendingOtp}
                           onClick={handleSendOtp}
                           className="btn btn-secondary btn-sm"
                         >
-                          {otpSent ? 'Resend OTP' : 'Send OTP'}
+                          {isSendingOtp ? 'Sending...' : (otpSent ? 'Resend OTP' : 'Send OTP')}
                         </button>
                       )}
                     </div>
 
                     {otpSent && !otpVerified && (
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                        <input
-                          type="text"
-                          maxLength={4}
-                          value={otpCode}
-                          onChange={e => setOtpCode(e.target.value)}
-                          placeholder="Enter 4-digit OTP (7829)"
-                          style={{
-                            width: '180px',
-                            padding: '8px 12px',
-                            borderRadius: '6px',
-                            border: '1px solid #2C8C83',
-                            fontSize: '0.88rem'
-                          }}
-                        />
-                        <button
-                          type="button"
-                          onClick={handleVerifyOtp}
-                          className="btn btn-primary btn-sm"
-                        >
-                          Verify OTP
-                        </button>
+                      <div style={{ marginTop: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input
+                            type="text"
+                            maxLength={6}
+                            value={otpCode}
+                            onChange={e => setOtpCode(e.target.value)}
+                            placeholder="Enter OTP"
+                            style={{
+                              width: '180px',
+                              padding: '8px 12px',
+                              borderRadius: '6px',
+                              border: '1px solid #2C8C83',
+                              fontSize: '0.88rem'
+                            }}
+                          />
+                          <button
+                            type="button"
+                            disabled={isVerifyingOtp}
+                            onClick={handleVerifyOtp}
+                            className="btn btn-primary btn-sm"
+                          >
+                            {isVerifyingOtp ? 'Verifying...' : 'Verify OTP'}
+                          </button>
+                        </div>
+                        {demoOtpHint && (
+                          <div style={{ fontSize: '0.74rem', color: '#B45309', marginTop: '4px' }}>
+                            Demo Simulation Active: Enter {demoOtpHint} to test verification.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {otpError && (
+                      <div style={{ color: '#DC2626', fontSize: '0.78rem', marginTop: '6px' }}>
+                        {otpError}
                       </div>
                     )}
                   </div>
@@ -1208,3 +1252,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     </div>
   );
 };
+
+export const BookingModal: React.FC<BookingModalProps> = ({
+  isOpen,
+  facility,
+  ...props
+}) => {
+  if (!isOpen || !facility) return null;
+  return <BookingModalContent {...props} facility={facility} />;
+};
+

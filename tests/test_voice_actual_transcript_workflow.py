@@ -1,15 +1,13 @@
 import unittest
 import requests
 import json
-
-BASE_URL = "http://127.0.0.1:8000"
+from fastapi.testclient import TestClient
+from backend.app.main import app
 
 class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Health check
-        res = requests.get(f"{BASE_URL}/api/health")
-        assert res.status_code == 200, f"Health check failed: {res.text}"
+        cls.client = TestClient(app)
 
     def test_01_telugu_govt_hospital_voice_query(self):
         """User speaks: 'నాకు దగ్గరలో ఉన్న ప్రభుత్వ ఆసుపత్రులు చూపించు'"""
@@ -20,7 +18,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
             "history": [],
             "language": "te-IN"
         }
-        res = requests.post(f"{BASE_URL}/api/chat/guided", json=payload)
+        res = self.client.post("/api/chat/guided", json=payload)
         self.assertEqual(res.status_code, 200)
         data = res.json()
 
@@ -45,7 +43,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
             "history": [],
             "language": "en-IN"
         }
-        res = requests.post(f"{BASE_URL}/api/chat/guided", json=payload)
+        res = self.client.post("/api/chat/guided", json=payload)
         self.assertEqual(res.status_code, 200)
         data = res.json()
 
@@ -66,7 +64,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
             "history": [],
             "language": "te-IN"
         }
-        res = requests.post(f"{BASE_URL}/api/chat/guided", json=payload)
+        res = self.client.post("/api/chat/guided", json=payload)
         self.assertEqual(res.status_code, 200)
         data = res.json()
 
@@ -85,7 +83,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
             "language": "te-IN",
             "format": "wav"
         }
-        res = requests.post(f"{BASE_URL}/api/speech/transcribe", json=payload)
+        res = self.client.post("/api/speech/transcribe", json=payload)
         self.assertEqual(res.status_code, 200)
         data = res.json()
 
@@ -99,7 +97,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
         """User speaks query 1, then speaks query 2: each receives distinct relevant answers."""
         # Turn 1
         q1 = "నాకు దగ్గరలో ఉన్న ప్రభుత్వ ఆసుపత్రులు చూపించు"
-        res1 = requests.post(f"{BASE_URL}/api/chat/guided", json={"message": q1, "city": "Hyderabad", "language": "te-IN"})
+        res1 = self.client.post("/api/chat/guided", json={"message": q1, "city": "Hyderabad", "language": "te-IN"})
         d1 = res1.json()
 
         # Turn 2: User changes topic completely to cataract cost
@@ -108,7 +106,7 @@ class TestVoiceActualTranscriptWorkflow(unittest.TestCase):
             {"role": "user", "content": q1},
             {"role": "assistant", "content": d1["reply"]}
         ]
-        res2 = requests.post(f"{BASE_URL}/api/chat/guided", json={"message": q2, "city": "Hyderabad", "history": history, "language": "en-IN"})
+        res2 = self.client.post("/api/chat/guided", json={"message": q2, "city": "Hyderabad", "history": history, "language": "en-IN"})
         d2 = res2.json()
 
         # Turn 2 must respond to cataract, not re-hash government hospital list

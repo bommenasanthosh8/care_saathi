@@ -25,8 +25,9 @@ import { SchemeNavigatorPage } from './pages/SchemeNavigatorPage';
 import { ComparisonPage } from './pages/ComparisonPage';
 import { MethodologyPage } from './pages/MethodologyPage';
 import { UserProfilePage } from './pages/UserProfilePage';
+import { HealthCardFinderPage } from './pages/HealthCardFinderPage';
 
-const PROTECTED_TABS = ['dashboard', 'estimate', 'hospitals', 'schemes', 'comparison', 'profile'];
+const PROTECTED_TABS = ['dashboard', 'estimate', 'hospitals', 'health-cards', 'schemes', 'comparison', 'profile'];
 
 const getInitialPath = (): string => {
   if (typeof window === 'undefined') return '';
@@ -206,9 +207,57 @@ const AppContent: React.FC = () => {
     setIsChatOpen(true);
   };
 
-  const handleRxConfirm = (treatmentName: string) => {
-    setSearchQuery(treatmentName);
-    setTreatment('custom', treatmentName);
+  const handleRxConfirm = (treatmentName: string, treatmentId?: string) => {
+    // Map procedure name to canonical treatment ID if not already supplied
+    let resolvedId = treatmentId;
+    let resolvedName = treatmentName;
+
+    if (!resolvedId) {
+      const lower = treatmentName.toLowerCase();
+      if (lower.includes('knee') || lower.includes('tkr') || lower.includes('joint replacement') || lower.includes('arthroplasty')) {
+        resolvedId = 'knee_replacement';
+        resolvedName = 'Total Knee Replacement (TKR)';
+      } else if (lower.includes('cataract') || lower.includes('phaco') || lower.includes('iol') || lower.includes('lens')) {
+        resolvedId = 'cataract_surgery';
+        resolvedName = 'Cataract Surgery (Phaco + IOL)';
+      } else if (lower.includes('angioplasty') || lower.includes('ptca') || lower.includes('stent')) {
+        resolvedId = 'angioplasty';
+        resolvedName = 'Coronary Angioplasty (PTCA)';
+      } else if (lower.includes('cabg') || lower.includes('bypass')) {
+        resolvedId = 'cabg';
+        resolvedName = 'Coronary Artery Bypass Graft (CABG)';
+      } else if (lower.includes('appendectomy') || lower.includes('appendix')) {
+        resolvedId = 'appendectomy';
+        resolvedName = 'Laparoscopic Appendectomy';
+      } else if (lower.includes('cholecystectomy') || lower.includes('gallbladder')) {
+        resolvedId = 'cholecystectomy';
+        resolvedName = 'Laparoscopic Cholecystectomy (Gallbladder)';
+      } else if (lower.includes('hernia')) {
+        resolvedId = 'hernia_repair';
+        resolvedName = 'Inguinal Hernia Repair';
+      } else if (lower.includes('cesarean') || lower.includes('c-section') || lower.includes('lscs')) {
+        resolvedId = 'cesarean_section';
+        resolvedName = 'Cesarean Delivery (C-Section)';
+      } else if (lower.includes('normal delivery')) {
+        resolvedId = 'normal_delivery';
+        resolvedName = 'Normal Vaginal Delivery';
+      } else if (lower.includes('mri') || lower.includes('magnetic resonance')) {
+        resolvedId = 'mri_brain';
+        resolvedName = 'MRI Brain with Contrast';
+      } else if (lower.includes('ct') || lower.includes('computed tomography')) {
+        resolvedId = 'ct_abdomen';
+        resolvedName = 'CT Abdomen and Pelvis';
+      } else if (lower.includes('dialysis') || lower.includes('hemodialysis')) {
+        resolvedId = 'hemodialysis';
+        resolvedName = 'Hemodialysis (Single Session)';
+      }
+    }
+
+    const finalId = resolvedId || 'knee_replacement';
+    const finalName = resolvedName || treatmentName;
+
+    setSearchQuery(finalName);
+    setTreatment(finalId, finalName);
     navigateToTab('dashboard');
   };
 
@@ -569,6 +618,7 @@ const AppContent: React.FC = () => {
               onExploreCost={() => navigateToTab('estimate')}
               onExploreHospitals={() => navigateToTab('hospitals')}
               onExploreSchemes={() => navigateToTab('schemes')}
+              onExploreHealthCards={() => navigateToTab('health-cards')}
               onHowItWorks={() => navigateToTab('methodology')}
               onOpenVoice={() => setIsVoiceOpen(true)}
               onOpenRx={() => setIsRxOpen(true)}
@@ -586,6 +636,7 @@ const AppContent: React.FC = () => {
 
           {activeTab === 'estimate' && <CostEstimatorPage />}
           {activeTab === 'hospitals' && <HospitalDiscoveryPage />}
+          {activeTab === 'health-cards' && <HealthCardFinderPage />}
           {activeTab === 'schemes' && <SchemeNavigatorPage />}
           {activeTab === 'comparison' && <ComparisonPage onBackToSearch={() => navigateToTab('hospitals')} />}
           {activeTab === 'methodology' && <MethodologyPage />}

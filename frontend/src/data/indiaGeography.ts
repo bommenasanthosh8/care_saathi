@@ -15,6 +15,7 @@ export interface LocationSuggestion {
   label: string;
   city: string;
   district: string;
+  locality?: string;
   state: string;
   tier: string;
   lat: number;

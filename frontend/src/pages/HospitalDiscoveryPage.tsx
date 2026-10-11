@@ -41,10 +41,14 @@ export const HospitalDiscoveryPage: React.FC = () => {
   const [pinCode, setPinCode] = useState<string>(searchState.pinCode || '');
   
   // Geolocation
-  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number }>({
-    lat: searchState.lat || 17.4399,
-    lng: searchState.lng || 78.4806
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(() => {
+    if (searchState.lat && searchState.lng) {
+      return { lat: searchState.lat, lng: searchState.lng };
+    }
+    return null;
   });
+  const [isLiveGps, setIsLiveGps] = useState<boolean>(Boolean(searchState.isLiveGps));
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | undefined>(searchState.gpsAccuracy);
   const [gpsLoading, setGpsLoading] = useState<boolean>(false);
   const [gpsNotice, setGpsNotice] = useState<string | null>(null);
 
@@ -94,8 +98,12 @@ export const HospitalDiscoveryPage: React.FC = () => {
     if (searchState.pinCode !== undefined) setPinCode(searchState.pinCode);
     if (searchState.lat && searchState.lng) {
       setUserCoords({ lat: searchState.lat, lng: searchState.lng });
+    } else {
+      setUserCoords(null);
     }
-  }, [searchState.city, searchState.state, searchState.locality, searchState.pinCode, searchState.lat, searchState.lng]);
+    setIsLiveGps(Boolean(searchState.isLiveGps));
+    setGpsAccuracy(searchState.gpsAccuracy);
+  }, [searchState.city, searchState.state, searchState.locality, searchState.pinCode, searchState.lat, searchState.lng, searchState.isLiveGps, searchState.gpsAccuracy]);
 
   useEffect(() => {
     api.getTreatments().then(setTreatmentsList).catch(console.error);
@@ -110,21 +118,24 @@ export const HospitalDiscoveryPage: React.FC = () => {
     setLoadError(null);
     try {
       const data = await api.getFacilities({
-        lat: userCoords.lat,
-        lng: userCoords.lng,
-        city: city,
+        lat: userCoords?.lat,
+        lng: userCoords?.lng,
+        city: city || undefined,
         locality: locality || undefined,
         pin: pinCode || undefined,
         treatment_id: selectedTreatmentId,
         ownership: ownershipFilter,
         scheme: schemeFilter,
-        radius: radiusKm === 999 ? undefined : radiusKm,
+        radius: (userCoords && radiusKm !== 999) ? radiusKm : undefined,
         sort: sortBy,
         verified_only: verifiedOnly
       });
 
-      // Enrich top results with exact road distance via Routes API proxy
-      const enrichedWithRoad = await googleEnrichmentService.enrichRoadDistances(userCoords, data);
+      // Enrich top results with exact road distance via Routes API proxy if coordinates available
+      let enrichedWithRoad = data;
+      if (userCoords) {
+        enrichedWithRoad = await googleEnrichmentService.enrichRoadDistances(userCoords, data);
+      }
 
       // Asynchronously enrich top 5 facilities with Google Place details & photos
       const topBatch = enrichedWithRoad.slice(0, 8);
@@ -173,6 +184,10 @@ export const HospitalDiscoveryPage: React.FC = () => {
   };
 
   const requestDeviceLocation = () => {
+    if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      setGpsNotice("GPS requires a secure connection (HTTPS or localhost). Please enter your city, district, or PIN code manually.");
+      return;
+    }
     if (!navigator.geolocation) {
       setGpsNotice("Geolocation is not supported by your browser. Please enter your locality or PIN code manually.");
       return;
@@ -183,20 +198,36 @@ export const HospitalDiscoveryPage: React.FC = () => {
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         setUserCoords({ lat: latitude, lng: longitude });
+        setIsLiveGps(true);
+        setGpsAccuracy(accuracy);
+        setLocation({
+          city: city,
+          state: stateName,
+          lat: latitude,
+          lng: longitude,
+          isLiveGps: true,
+          gpsAccuracy: accuracy
+        });
         setGpsLoading(false);
-        setGpsNotice("Location updated from your GPS device.");
+        setGpsNotice(`GPS acquired successfully with ±${Math.round(accuracy)}m accuracy.`);
       },
       (err) => {
         setGpsLoading(false);
+        setIsLiveGps(false);
+        setGpsAccuracy(undefined);
         if (err.code === 1) {
-          setGpsNotice("Location permission was denied. You can manually enter your locality or PIN code in the search field above.");
+          setGpsNotice("Location permission denied. Please enable location permissions in browser settings or use manual city/PIN search.");
+        } else if (err.code === 2) {
+          setGpsNotice("GPS position unavailable. Please search manually by city, district, or PIN code.");
+        } else if (err.code === 3) {
+          setGpsNotice("GPS location request timed out. Please try again or search manually.");
         } else {
-          setGpsNotice("Unable to retrieve GPS coordinates. Please select your city or PIN code above.");
+          setGpsNotice(`Unable to acquire GPS coordinates (${err.message}). Please use manual search.`);
         }
       },
-      { timeout: 8000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
@@ -210,6 +241,8 @@ export const HospitalDiscoveryPage: React.FC = () => {
 
   const handleSearchThisArea = (newLat: number, newLng: number) => {
     setUserCoords({ lat: newLat, lng: newLng });
+    setIsLiveGps(false);
+    setGpsAccuracy(undefined);
   };
 
   // Currently selected facility for the docked map card
@@ -223,13 +256,17 @@ export const HospitalDiscoveryPage: React.FC = () => {
     return treatmentsList.find(t => t.id === selectedTreatmentId);
   }, [treatmentsList, selectedTreatmentId]);
 
-  // User Origin Text (e.g. From: Banjara Hills, 500034)
+  // User Origin Text (e.g. Live GPS (±15m) or From: Banjara Hills, 500034)
   const originText = useMemo(() => {
+    if (isLiveGps) {
+      const acc = gpsAccuracy ? ` (±${Math.round(gpsAccuracy)}m)` : '';
+      return `Live GPS${acc}${city ? ` in ${city}` : ''}`;
+    }
     if (locality && pinCode) return `${locality}, ${pinCode}`;
     if (locality) return `${locality}, ${city}`;
     if (pinCode) return `${city} (${pinCode})`;
-    return `${city || 'Hyderabad'}`;
-  }, [locality, pinCode, city]);
+    return `${city || 'All India'}`;
+  }, [isLiveGps, gpsAccuracy, locality, pinCode, city]);
 
   return (
     <div className="hospital-discovery-container">
@@ -269,6 +306,31 @@ export const HospitalDiscoveryPage: React.FC = () => {
                 Change
               </button>
             </div>
+
+            {gpsNotice && (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '5px 12px',
+                borderRadius: '6px',
+                fontSize: '0.8rem',
+                marginTop: '8px',
+                backgroundColor: isLiveGps ? '#F0FDF4' : '#FEF2F2',
+                color: isLiveGps ? '#166534' : '#991B1B',
+                border: `1px solid ${isLiveGps ? '#BBF7D0' : '#FECACA'}`
+              }}>
+                <span>{gpsNotice}</span>
+                <button
+                  type="button"
+                  onClick={() => setGpsNotice(null)}
+                  style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'inherit', padding: 0 }}
+                  aria-label="Dismiss notice"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* View mode toggle (Split vs List only vs Map only) */}
@@ -432,11 +494,14 @@ export const HospitalDiscoveryPage: React.FC = () => {
           <button
             onClick={requestDeviceLocation}
             disabled={gpsLoading}
-            className="btn btn-secondary btn-sm"
+            className={`btn ${isLiveGps ? 'btn-primary' : 'btn-secondary'} btn-sm`}
             style={{ padding: '6px 12px', fontSize: '0.8rem', height: '35px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            title={isLiveGps && gpsAccuracy ? `Live GPS active with ±${Math.round(gpsAccuracy)}m accuracy` : 'Acquire exact device GPS coordinates'}
           >
-            <Navigation size={13} color="#0D9488" />
-            <span>{gpsLoading ? 'Locating...' : 'Use GPS'}</span>
+            <Navigation size={13} color={isLiveGps ? '#FFFFFF' : '#0D9488'} />
+            <span>
+              {gpsLoading ? 'Locating...' : isLiveGps ? `GPS Active (±${gpsAccuracy ? Math.round(gpsAccuracy) + 'm' : 'Live'})` : 'Use GPS'}
+            </span>
           </button>
         </div>
 
@@ -524,8 +589,8 @@ export const HospitalDiscoveryPage: React.FC = () => {
         <div className="map-only-container">
           <HospitalMapContainer
             facilities={facilities}
-            userLat={userCoords.lat}
-            userLng={userCoords.lng}
+            userLat={userCoords?.lat}
+            userLng={userCoords?.lng}
             radiusKm={radiusKm === 999 ? 30 : radiusKm}
             selectedFacilityId={selectedFacilityId}
             hoveredFacilityId={hoveredFacilityId}
@@ -662,8 +727,8 @@ export const HospitalDiscoveryPage: React.FC = () => {
                     <HospitalCard
                       facility={fac}
                       activeTreatmentId={selectedTreatmentId}
-                      userLat={userCoords.lat}
-                      userLng={userCoords.lng}
+                      userLat={userCoords?.lat}
+                      userLng={userCoords?.lng}
                       onViewDetails={setSelectedFacilityForModal}
                       onBookAppointment={setBookingFacility}
                     />
@@ -681,8 +746,8 @@ export const HospitalDiscoveryPage: React.FC = () => {
               <div className="hospital-map-wrapper">
                 <HospitalMapContainer
                   facilities={facilities}
-                  userLat={userCoords.lat}
-                  userLng={userCoords.lng}
+                  userLat={userCoords?.lat}
+                  userLng={userCoords?.lng}
                   radiusKm={radiusKm === 999 ? 30 : radiusKm}
                   selectedFacilityId={selectedFacilityId}
                   hoveredFacilityId={hoveredFacilityId}

@@ -8,7 +8,7 @@ import { api, PrescriptionOCRDTO, DetectedMedicineDetailDTO } from '../services/
 interface PrescriptionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirmTreatment: (treatmentName: string) => void;
+  onConfirmTreatment: (treatmentName: string, treatmentId?: string) => void;
   onOpenChatWithRx?: (rxFilename?: string, rxText?: string) => void;
 }
 
@@ -23,7 +23,9 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
   const [previewName, setPreviewName] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [ocrResult, setOcrResult] = useState<PrescriptionOCRDTO | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
   const [confirmedProcedure, setConfirmedProcedure] = useState<string>("");
+  const [confirmedTreatmentId, setConfirmedTreatmentId] = useState<string>("");
   const [editedMedicines, setEditedMedicines] = useState<DetectedMedicineDetailDTO[]>([]);
   const [activeTab, setActiveTab] = useState<'extracted' | 'medicines' | 'image'>('extracted');
 
@@ -38,8 +40,21 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
   if (!isOpen) return null;
 
   const handleFileUpload = async (file: File) => {
+    // 1. Client-side size & extension validation
+    if (file.size > 10 * 1024 * 1024) {
+      setOcrError("File size exceeds 10MB limit. Please upload a compressed photo or document.");
+      return;
+    }
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.pdf'];
+    if (!allowed.includes(ext) && !file.type.startsWith('image/')) {
+      setOcrError("Unsupported format. Please upload a clear JPG, JPEG, PNG, WEBP, or PDF prescription.");
+      return;
+    }
+
     setSelectedFile(file);
     setPreviewName(file.name);
+    setOcrError(null);
     if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(imagePreviewUrl);
     }
@@ -52,15 +67,25 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
       const res = await api.ocrPrescription(file);
       setOcrResult(res);
       setEditedMedicines(res.detected_medicines_detailed || []);
-      if (res.suggested_search_query) {
+      
+      if (res.canonical_treatment_id) {
+        setConfirmedTreatmentId(res.canonical_treatment_id);
+      } else {
+        setConfirmedTreatmentId("");
+      }
+
+      if (res.canonical_treatment_name) {
+        setConfirmedProcedure(res.canonical_treatment_name);
+      } else if (res.suggested_search_query) {
         setConfirmedProcedure(res.suggested_search_query);
       } else if (res.detected_treatments && res.detected_treatments.length > 0) {
         setConfirmedProcedure(res.detected_treatments[0]);
       } else {
         setConfirmedProcedure("");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Prescription OCR error:", err);
+      setOcrError(err?.message || "Unable to read prescription. Please verify the image is sharp, well-lit, and not corrupted.");
     } finally {
       setIsProcessing(false);
     }
@@ -72,27 +97,42 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
     setImagePreviewUrl(null);
     setIsProcessing(true);
     setOcrResult(null);
+    setOcrError(null);
 
     try {
-      const res = await api.ocrPrescription(undefined, undefined);
-      // Call endpoint with sample preset filename
       const resSpecific: PrescriptionOCRDTO = await fetch('/api/ocr/prescription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ filename: sampleFilename })
-      }).then(r => r.json());
+      }).then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `Server responded with ${r.status}`);
+        }
+        return r.json();
+      });
 
       setOcrResult(resSpecific);
       setEditedMedicines(resSpecific.detected_medicines_detailed || []);
-      if (resSpecific.suggested_search_query) {
+      
+      if (resSpecific.canonical_treatment_id) {
+        setConfirmedTreatmentId(resSpecific.canonical_treatment_id);
+      } else {
+        setConfirmedTreatmentId("");
+      }
+
+      if (resSpecific.canonical_treatment_name) {
+        setConfirmedProcedure(resSpecific.canonical_treatment_name);
+      } else if (resSpecific.suggested_search_query) {
         setConfirmedProcedure(resSpecific.suggested_search_query);
       } else if (resSpecific.detected_treatments && resSpecific.detected_treatments.length > 0) {
         setConfirmedProcedure(resSpecific.detected_treatments[0]);
       } else {
         setConfirmedProcedure("");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Sample OCR error:", err);
+      setOcrError(err?.message || "Failed to load sample prescription.");
     } finally {
       setIsProcessing(false);
     }
@@ -226,6 +266,57 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* OCR Error Banner */}
+        {ocrError && !isProcessing && (
+          <div style={{
+            padding: '14px 16px',
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: 'var(--radius-md)',
+            marginBottom: '16px',
+            color: '#991B1B',
+            fontSize: '0.86rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700 }}>
+                <AlertCircle size={18} />
+                <span>Prescription Upload & OCR Notice</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOcrError(null)}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#991B1B' }}
+                aria-label="Dismiss error"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div>{ocrError}</div>
+            <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => document.getElementById('rx-upload-input')?.click()}
+                className="btn btn-secondary btn-sm"
+                style={{ borderColor: '#F87171', color: '#991B1B' }}
+              >
+                <RefreshCw size={12} style={{ marginRight: '4px' }} />
+                Upload Clearer Photo
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOcrError(null);
+                  setConfirmedProcedure("Total Knee Replacement (TKR)");
+                  setConfirmedTreatmentId("knee_replacement");
+                }}
+                className="btn btn-secondary btn-sm"
+              >
+                Enter Procedure Manually
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Processing Spinner */}
         {isProcessing && (
@@ -436,21 +527,69 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
             )}
 
             {/* Detected Procedures */}
-            {ocrResult.detected_treatments.length > 0 && (
-              <div style={{ marginBottom: '12px' }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '4px' }}>
-                  Identified Procedure / Care Requirement:
+            {/* Detected Procedures & Ambiguity Disambiguation */}
+            {((ocrResult.available_treatment_matches && ocrResult.available_treatment_matches.length > 0) ||
+              ocrResult.detected_treatments.length > 0) && (
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-navy)', marginBottom: '6px' }}>
+                  Identified Procedure / Care Requirement (Click to select):
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {ocrResult.detected_treatments.map(t => (
-                    <span key={t} className="badge badge-teal" style={{ fontSize: '0.82rem', padding: '4px 10px' }}>
-                      🩺 {t}
-                    </span>
-                  ))}
+                  {ocrResult.available_treatment_matches && ocrResult.available_treatment_matches.length > 0 ? (
+                    ocrResult.available_treatment_matches.map(m => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setConfirmedProcedure(m.name);
+                          setConfirmedTreatmentId(m.id);
+                        }}
+                        className={`badge ${confirmedTreatmentId === m.id ? 'badge-navy' : 'badge-teal'}`}
+                        style={{
+                          fontSize: '0.82rem',
+                          padding: '5px 12px',
+                          cursor: 'pointer',
+                          border: confirmedTreatmentId === m.id ? '2px solid #0D9488' : '1px solid #99F6E4'
+                        }}
+                      >
+                        🩺 {m.name} {confirmedTreatmentId === m.id ? '✓' : ''}
+                      </button>
+                    ))
+                  ) : (
+                    ocrResult.detected_treatments.map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setConfirmedProcedure(t)}
+                        className={`badge ${confirmedProcedure === t ? 'badge-navy' : 'badge-teal'}`}
+                        style={{
+                          fontSize: '0.82rem',
+                          padding: '5px 12px',
+                          cursor: 'pointer',
+                          border: confirmedProcedure === t ? '2px solid #0D9488' : '1px solid #99F6E4'
+                        }}
+                      >
+                        🩺 {t}
+                      </button>
+                    ))
+                  )}
                   {ocrResult.detected_diagnostics.map(d => (
-                    <span key={d} className="badge" style={{ fontSize: '0.82rem', padding: '4px 10px', backgroundColor: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE' }}>
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setConfirmedProcedure(d)}
+                      className="badge"
+                      style={{
+                        fontSize: '0.82rem',
+                        padding: '5px 12px',
+                        backgroundColor: '#EFF6FF',
+                        color: '#1D4ED8',
+                        border: '1px solid #BFDBFE',
+                        cursor: 'pointer'
+                      }}
+                    >
                       🔬 {d}
-                    </span>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -466,7 +605,10 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
                 className="form-input"
                 placeholder="Enter or confirm clinical procedure (e.g., Total Knee Replacement, Cataract Surgery)..."
                 value={confirmedProcedure}
-                onChange={e => setConfirmedProcedure(e.target.value)}
+                onChange={e => {
+                  setConfirmedProcedure(e.target.value);
+                  setConfirmedTreatmentId(""); // Reset canonical ID if manually altered
+                }}
                 style={{ fontSize: '0.92rem' }}
               />
               <div style={{ fontSize: '0.72rem', color: 'var(--color-text-grey)', marginTop: '4px' }}>
@@ -508,7 +650,7 @@ export const PrescriptionModal: React.FC<PrescriptionModalProps> = ({
               type="button"
               onClick={() => {
                 if (confirmedProcedure.trim()) {
-                  onConfirmTreatment(confirmedProcedure.trim());
+                  onConfirmTreatment(confirmedProcedure.trim(), confirmedTreatmentId || undefined);
                   onClose();
                 }
               }}

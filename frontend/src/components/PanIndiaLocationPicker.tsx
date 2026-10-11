@@ -136,6 +136,16 @@ export const PanIndiaLocationPicker: React.FC<PanIndiaLocationPickerProps> = ({
 
   // Browser Geolocation
   const handleUseGps = () => {
+    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    if (typeof window !== 'undefined' && !window.isSecureContext && !isLocalhost) {
+      setGpsStatus({
+        loading: false,
+        message: "⚠️ GPS requires a secure HTTPS connection or localhost. Please select your state or city manually.",
+        isError: true
+      });
+      return;
+    }
+
     if (!navigator.geolocation) {
       setGpsStatus({
         loading: false,
@@ -153,16 +163,29 @@ export const PanIndiaLocationPicker: React.FC<PanIndiaLocationPickerProps> = ({
 
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
+        const roundedAcc = Math.round(accuracy);
         try {
           const resolved = await api.resolveLocation({ lat: latitude, lng: longitude });
+          const localityPart = resolved.locality || resolved.district || '';
+          const pinPart = resolved.pin_code ? ` - ${resolved.pin_code}` : '';
+          const tierTag = resolved.tier_label || resolved.tier || '';
+          const tierSuffix = tierTag ? ` (${tierTag})` : '';
+
+          const displayLabel = resolved.locality && resolved.locality !== resolved.city
+            ? `${resolved.locality}, ${resolved.city}, ${resolved.state}${pinPart}${tierSuffix}`
+            : `${resolved.city}, ${resolved.state}${pinPart}${tierSuffix}`;
+
           const payload: LocationPayload = {
             city: resolved.city,
             state: resolved.state,
             district: resolved.district,
-            locality: resolved.district || '',
-            lat: resolved.lat,
-            lng: resolved.lng
+            locality: localityPart,
+            pinCode: resolved.pin_code || '',
+            lat: latitude, // Preserve browser's actual GPS latitude
+            lng: longitude, // Preserve browser's actual GPS longitude
+            isLiveGps: true,
+            gpsAccuracy: roundedAcc
           };
           setLocation(payload);
           setSelectedCityName(resolved.city);
@@ -171,47 +194,51 @@ export const PanIndiaLocationPicker: React.FC<PanIndiaLocationPickerProps> = ({
 
           setGpsStatus({
             loading: false,
-            message: `📍 GPS detected: ${resolved.city}, ${resolved.state} (${resolved.tier_label})`,
+            message: `📍 Live GPS detected (±${roundedAcc}m): ${displayLabel}`,
             isError: false
           });
 
           if (onLocationSelect) {
             onLocationSelect({
-              label: `${resolved.city}, ${resolved.state}`,
+              label: displayLabel,
               city: resolved.city,
               district: resolved.district,
+              locality: resolved.locality,
+              pinCode: resolved.pin_code || undefined,
               state: resolved.state,
               tier: resolved.tier,
-              lat: resolved.lat,
-              lng: resolved.lng
+              lat: latitude,
+              lng: longitude
             });
           }
-        } catch (e) {
-          // Fallback coords
+        } catch {
+          // Truthful fallback preserving exact browser GPS without inventing an address
           setLocation({
-            city: searchState.city || 'Hyderabad',
-            state: searchState.state || 'Telangana',
+            city: 'Near your GPS location',
+            state: '',
             lat: latitude,
-            lng: longitude
+            lng: longitude,
+            isLiveGps: true,
+            gpsAccuracy: roundedAcc
           });
           setGpsStatus({
             loading: false,
-            message: `📍 GPS coordinates captured (${latitude.toFixed(3)}, ${longitude.toFixed(3)})`,
+            message: `📍 Live GPS captured (±${roundedAcc}m): ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
             isError: false
           });
         }
       },
       (err) => {
-        let msg = "Location permission denied. Please choose your city or enter PIN code.";
-        if (err.code === 2) msg = "Device location unavailable. Please enter your location manually.";
-        if (err.code === 3) msg = "Location request timed out. Please enter your location manually.";
+        let msg = "Location permission denied. You can select your state/city or enter PIN code manually.";
+        if (err.code === 2) msg = "Device location unavailable. Please choose your location manually.";
+        if (err.code === 3) msg = "GPS request timed out. Please retry or choose your location manually.";
         setGpsStatus({
           loading: false,
           message: msg,
           isError: true
         });
       },
-      { timeout: 9000, enableHighAccuracy: true }
+      { timeout: 15000, enableHighAccuracy: true, maximumAge: 0 }
     );
   };
 

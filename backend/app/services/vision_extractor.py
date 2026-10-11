@@ -11,10 +11,14 @@ from ..config import settings
 logger = logging.getLogger("caresaathi.vision")
 
 VISION_PROMPT = """You are an expert clinical pharmacologist and prescription OCR specialist for the Indian healthcare system.
-Analyze this medical prescription image and extract all visible prescribed medications, doctor details, and date.
+Analyze this medical prescription image and extract all visible transcribed text, prescribed medications, clinical diagnoses, advised procedures, doctor details, and date.
 
 You MUST output STRICT JSON only, conforming exactly to this schema:
 {
+  "extracted_text": "Complete transcribed clinical text as visible on the prescription paper line by line",
+  "diagnoses_and_procedures": [
+    "Clinical diagnosis, recommended surgery, planned procedure, or diagnostic investigation mentioned e.g. 'Total Knee Replacement (TKR)', 'Cataract', 'Appendectomy', 'Cholelithiasis', 'MRI Knee', 'CBC'"
+  ],
   "medicines": [
     {
       "name_as_written": "Exact medicine name text as written on the prescription paper",
@@ -28,24 +32,17 @@ You MUST output STRICT JSON only, conforming exactly to this schema:
       "confidence": 0.95  // Float 0.0 to 1.0 indicating legibility confidence
     }
   ],
-  "doctor_name": "Doctor name or null",
-  "date": "Prescription date or null",
+  "doctor_name": "Doctor name or clinic name, or null if not legible",
+  "date": "Prescription date or null if not legible",
   "unreadable_parts": ["List of any illegible words, doubtful lines, or unclear handwriting sections"]
 }
 
 STRICT CLINICAL RULES:
-1. ONLY extract medicines that are ACTUALLY LEGIBLE on the prescription. NEVER invent, hallucinate, or guess medicine names, salts, or dosages.
-2. If handwriting is illegible, doubtful, or ambiguous, return null or 'unknown' for unclear fields, set confidence low (< 0.6), and add the doubtful phrase to 'unreadable_parts'.
-3. Return unknown or null for unclear fields (strength, form, dosage_pattern, quantity). Do not assume dosages not written.
-4. IGNORE non-medicine text such as patient name, age, phone numbers, clinic letterhead, address, or disease diagnoses.
-5. Calculate quantity accurately only when pattern and duration are clearly legible:
-   - 'OD' or '1-0-0' or '0-0-1' = 1 per day
-   - 'BD' or '1-0-1' = 2 per day
-   - 'TDS' or '1-1-1' = 3 per day
-   - 'QID' = 4 per day
-   - 'SOS' = 1 per day (as needed)
-   If duration or frequency is unknown or unreadable, set quantity to null.
-6. Output raw valid JSON only. Do NOT include markdown code blocks.
+1. ONLY extract information that is ACTUALLY LEGIBLE on the prescription. NEVER invent, hallucinate, or guess diagnoses, operations, medicines, or patient details.
+2. Distinctly separate medicines from clinical diagnoses, surgical procedures, and lab investigations.
+3. If handwriting is illegible, doubtful, or ambiguous, return null or 'unknown' for unclear fields, set confidence low (< 0.6), and add the doubtful phrase to 'unreadable_parts'.
+4. Calculate medicine quantity accurately only when pattern and duration are clearly legible (e.g. BD x 5 days = 10). If duration or frequency is unknown or unreadable, set quantity to null.
+5. Output raw valid JSON only. Do NOT include markdown code blocks.
 """
 
 def clean_json_text(text: str) -> str:

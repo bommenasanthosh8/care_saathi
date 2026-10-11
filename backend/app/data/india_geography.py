@@ -5,6 +5,14 @@ and healthcare pricing tier classifications (Tier 1 Metros, Tier 2 Cities, Tier 
 """
 
 from typing import Dict, List, Optional, Tuple, Any
+import os
+import urllib.request
+import urllib.parse
+import json
+import logging
+import math
+
+logger = logging.getLogger("caresaathi.geography")
 
 # All 28 States and 8 Union Territories
 INDIAN_STATES_AND_UTS: List[Dict[str, str]] = [
@@ -379,6 +387,143 @@ PIN_PREFIX_MAP: Dict[str, Tuple[str, str, float, float]] = {
     "83": ("Jharkhand", "Ranchi / Jamshedpur", 23.3441, 85.3096),
 }
 
+# Granular Pan-India Sub-Localities & Urban Centers for Nearest-Neighborhood Fallback
+LOCALITY_REGISTRY: List[Dict[str, Any]] = [
+    # Hyderabad / Telangana Localities
+    {"name": "Nizampet", "locality": "Nizampet", "city": "Hyderabad", "district": "Medchal-Malkajgiri", "state": "Telangana", "pin_code": "500090", "lat": 17.5160, "lng": 78.3713, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Miyapur", "locality": "Miyapur", "city": "Hyderabad", "district": "Ranga Reddy", "state": "Telangana", "pin_code": "500049", "lat": 17.4968, "lng": 78.3548, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Kukatpally", "locality": "Kukatpally", "city": "Hyderabad", "district": "Medchal-Malkajgiri", "state": "Telangana", "pin_code": "500072", "lat": 17.4875, "lng": 78.4158, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Gachibowli", "locality": "Gachibowli", "city": "Hyderabad", "district": "Ranga Reddy", "state": "Telangana", "pin_code": "500032", "lat": 17.4401, "lng": 78.3489, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Madhapur", "locality": "Madhapur", "city": "Hyderabad", "district": "Ranga Reddy", "state": "Telangana", "pin_code": "500081", "lat": 17.4483, "lng": 78.3915, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Banjara Hills", "locality": "Banjara Hills", "city": "Hyderabad", "district": "Hyderabad", "state": "Telangana", "pin_code": "500034", "lat": 17.4156, "lng": 78.4350, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Jubilee Hills", "locality": "Jubilee Hills", "city": "Hyderabad", "district": "Hyderabad", "state": "Telangana", "pin_code": "500033", "lat": 17.4319, "lng": 78.4073, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    {"name": "Secunderabad", "locality": "Secunderabad", "city": "Hyderabad", "district": "Hyderabad", "state": "Telangana", "pin_code": "500003", "lat": 17.4399, "lng": 78.4983, "tier": "Tier 1", "cost_multiplier": 1.0, "cghs_zone": "Hyderabad"},
+    # Bengaluru Localities
+    {"name": "Koramangala", "locality": "Koramangala", "city": "Bengaluru", "district": "Bengaluru Urban", "state": "Karnataka", "pin_code": "560034", "lat": 12.9352, "lng": 77.6245, "tier": "Tier 1", "cost_multiplier": 1.02, "cghs_zone": "Bengaluru"},
+    {"name": "Whitefield", "locality": "Whitefield", "city": "Bengaluru", "district": "Bengaluru Urban", "state": "Karnataka", "pin_code": "560066", "lat": 12.9698, "lng": 77.7500, "tier": "Tier 1", "cost_multiplier": 1.02, "cghs_zone": "Bengaluru"},
+    {"name": "Indiranagar", "locality": "Indiranagar", "city": "Bengaluru", "district": "Bengaluru Urban", "state": "Karnataka", "pin_code": "560038", "lat": 12.9784, "lng": 77.6408, "tier": "Tier 1", "cost_multiplier": 1.02, "cghs_zone": "Bengaluru"},
+    # Mumbai Localities
+    {"name": "Andheri", "locality": "Andheri", "city": "Mumbai", "district": "Mumbai Suburban", "state": "Maharashtra", "pin_code": "400053", "lat": 19.1136, "lng": 72.8697, "tier": "Tier 1", "cost_multiplier": 1.08, "cghs_zone": "Mumbai"},
+    {"name": "Bandra", "locality": "Bandra", "city": "Mumbai", "district": "Mumbai Suburban", "state": "Maharashtra", "pin_code": "400050", "lat": 19.0596, "lng": 72.8295, "tier": "Tier 1", "cost_multiplier": 1.08, "cghs_zone": "Mumbai"},
+    # Delhi / NCR Localities
+    {"name": "Dwarka", "locality": "Dwarka", "city": "New Delhi", "district": "South West Delhi", "state": "Delhi", "pin_code": "110075", "lat": 28.5921, "lng": 77.0460, "tier": "Tier 1", "cost_multiplier": 1.05, "cghs_zone": "Delhi"},
+    {"name": "Rohini", "locality": "Rohini", "city": "New Delhi", "district": "North West Delhi", "state": "Delhi", "pin_code": "110085", "lat": 28.7140, "lng": 77.1160, "tier": "Tier 1", "cost_multiplier": 1.05, "cghs_zone": "Delhi"},
+    {"name": "Gurugram Cyber City", "locality": "Cyber City", "city": "Gurugram", "district": "Gurugram", "state": "Haryana", "pin_code": "122002", "lat": 28.4950, "lng": 77.0895, "tier": "Tier 2", "cost_multiplier": 0.95, "cghs_zone": "Delhi"},
+    {"name": "Noida Sector 18", "locality": "Sector 18", "city": "Noida", "district": "Gautam Buddha Nagar", "state": "Uttar Pradesh", "pin_code": "201301", "lat": 28.5708, "lng": 77.3261, "tier": "Tier 2", "cost_multiplier": 0.92, "cghs_zone": "Delhi"},
+]
+
+def get_tier_label(tier: Optional[str]) -> str:
+    """Returns a user-friendly label for healthcare pricing tiers, never returning undefined or empty."""
+    if not tier:
+        return "Standard Tier"
+    t = str(tier).strip()
+    if "1" in t:
+        return "Tier 1 Metro"
+    elif "2" in t:
+        return "Tier 2 City"
+    elif "3" in t or "Rural" in t:
+        return "Tier 3 / Rural"
+    return t
+
+def _haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Haversine formula to compute great circle distance in km between two GPS coordinates."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def reverse_geocode_coordinates(lat: float, lng: float) -> Optional[Dict[str, Any]]:
+    """
+    Reverse geocodes coordinates using OpenStreetMap Nominatim or Google Geocoding API.
+    Returns structured locality, city, district, state, and postal code.
+    Times out in 2.5s to preserve live GPS responsiveness.
+    """
+    if lat is None or lng is None:
+        return None
+    try:
+        f_lat, f_lng = float(lat), float(lng)
+    except (TypeError, ValueError):
+        return None
+
+    if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lng <= 180.0):
+        return None
+
+    # 1. Google Geocoding API if key configured
+    google_key = os.getenv("GOOGLE_MAPS_SERVER_KEY") or os.getenv("GOOGLE_PLACES_API_KEY") or ""
+    if google_key.strip():
+        try:
+            url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={f_lat},{f_lng}&key={google_key.strip()}"
+            req = urllib.request.Request(url, headers={"User-Agent": "CareSaathi-AI/1.0"})
+            with urllib.request.urlopen(req, timeout=2.5) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                if data.get("status") == "OK" and data.get("results"):
+                    first = data["results"][0]
+                    comps = first.get("address_components", [])
+                    locality = None
+                    city = None
+                    district = None
+                    state = None
+                    pin_code = None
+                    for c in comps:
+                        types = c.get("types", [])
+                        if any(t in types for t in ["sublocality", "neighborhood", "sublocality_level_1", "sublocality_level_2"]):
+                            if not locality:
+                                locality = c.get("long_name")
+                        elif "locality" in types:
+                            city = c.get("long_name")
+                        elif "administrative_area_level_2" in types:
+                            district = c.get("long_name")
+                        elif "administrative_area_level_1" in types:
+                            state = c.get("long_name")
+                        elif "postal_code" in types:
+                            pin_code = c.get("long_name")
+                    return {
+                        "locality": locality or city,
+                        "city": city or locality or "Custom Location",
+                        "district": district or city or "",
+                        "state": state or "",
+                        "pin_code": pin_code,
+                        "matched_by": "google_reverse_geocoding"
+                    }
+        except Exception as e:
+            logger.debug(f"Google reverse geocoding skipped or failed: {e}")
+
+    # 2. OSM Nominatim API
+    nominatim_base = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org").rstrip("/")
+    try:
+        url = f"{nominatim_base}/reverse?format=jsonv2&lat={f_lat}&lon={f_lng}"
+        req = urllib.request.Request(url, headers={"User-Agent": "CareSaathi-AI/1.0 (Healthcare Transparency Platform; contact@caresaathi.in)"})
+        with urllib.request.urlopen(req, timeout=2.5) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            addr = data.get("address", {})
+            locality = (
+                addr.get("suburb") or
+                addr.get("neighbourhood") or
+                addr.get("residential") or
+                addr.get("village") or
+                addr.get("hamlet") or
+                addr.get("subdistrict")
+            )
+            city = addr.get("city") or addr.get("town") or addr.get("municipality") or locality
+            district = addr.get("state_district") or addr.get("district") or addr.get("county") or city
+            state = addr.get("state") or ""
+            pin_code = addr.get("postcode")
+            return {
+                "locality": locality or city,
+                "city": city or locality or "Custom Location",
+                "district": district or "",
+                "state": state,
+                "pin_code": pin_code,
+                "matched_by": "nominatim_reverse_geocoding"
+            }
+    except Exception as e:
+        logger.debug(f"Nominatim reverse geocoding skipped or failed: {e}")
+
+    return None
+
 def resolve_location(
     city: Optional[str] = None,
     state: Optional[str] = None,
@@ -389,27 +534,93 @@ def resolve_location(
 ) -> Dict[str, Any]:
     """
     Resolves input location criteria to structured Pan-India coordinates,
-    district, state, and healthcare pricing tier. Never forces Hyderabad.
+    district, state, and healthcare pricing tier.
+    - Preserves exact user GPS coordinates.
+    - Resolves real locality and postal code via live reverse-geocoding (Nominatim / Google).
+    - Falls back to nearest verified locality/metro centroid without hardcoding Hyderabad.
+    - Never emits undefined, null, or fabricated fallback PIN codes.
     """
     # 1. Exact GPS coordinates passed
     if user_lat is not None and user_lng is not None:
+        try:
+            f_lat, f_lng = float(user_lat), float(user_lng)
+        except (ValueError, TypeError):
+            f_lat, f_lng = 28.6139, 77.2090
+
+        # Validate coordinate range
+        if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lng <= 180.0):
+            f_lat, f_lng = 28.6139, 77.2090
+
+        # Attempt live reverse geocoding first
+        try:
+            geo_result = reverse_geocode_coordinates(f_lat, f_lng)
+        except Exception as e:
+            logger.debug(f"Reverse geocoding error in resolve_location: {e}")
+            geo_result = None
+        
+        resolved_locality = None
+        resolved_city = None
+        resolved_district = None
+        resolved_state = None
+        resolved_pin = None
+        matched_by = "gps_coordinates"
+
+        if geo_result:
+            resolved_locality = geo_result.get("locality")
+            resolved_city = geo_result.get("city")
+            resolved_district = geo_result.get("district")
+            resolved_state = geo_result.get("state")
+            resolved_pin = geo_result.get("pin_code")
+            matched_by = geo_result.get("matched_by", "live_reverse_geocoding")
+        else:
+            # Check closest verified locality in LOCALITY_REGISTRY within 8 km
+            closest_locality = None
+            min_loc_dist = float("inf")
+            for loc in LOCALITY_REGISTRY:
+                dist = _haversine_distance_km(f_lat, f_lng, loc["lat"], loc["lng"])
+                if dist < min_loc_dist:
+                    min_loc_dist = dist
+                    closest_locality = loc
+
+            if closest_locality and min_loc_dist <= 8.0:
+                resolved_locality = closest_locality["locality"]
+                resolved_city = closest_locality["city"]
+                resolved_district = closest_locality["district"]
+                resolved_state = closest_locality["state"]
+                resolved_pin = closest_locality["pin_code"]
+                matched_by = "locality_registry_match"
+
+        # Find closest metro in LOCATION_REGISTRY for pricing tier and CGHS zone
         closest_loc = None
         min_dist = float("inf")
         for key, info in LOCATION_REGISTRY.items():
-            dist = (info["lat"] - user_lat)**2 + (info["lng"] - user_lng)**2
+            dist = _haversine_distance_km(f_lat, f_lng, info["lat"], info["lng"])
             if dist < min_dist:
                 min_dist = dist
                 closest_loc = info
 
+        final_city = city or resolved_city or (closest_loc["city"] if closest_loc else "GPS Location")
+        final_state = state or resolved_state or (closest_loc["state"] if closest_loc else "")
+        final_district = district or resolved_district or (closest_loc["district"] if closest_loc else "")
+        final_locality = resolved_locality or (f"Near {final_city}" if final_city else "Near your GPS location")
+
+        tier = closest_loc["tier"] if closest_loc else "Tier 2"
+        cost_multiplier = closest_loc["cost_multiplier"] if closest_loc else 0.85
+        cghs_zone = closest_loc["cghs_zone"] if closest_loc else "Pan-India"
+
         return {
-            "lat": user_lat,
-            "lng": user_lng,
-            "city": city or (closest_loc["city"] if closest_loc else "Custom Location"),
-            "district": district or (closest_loc["district"] if closest_loc else ""),
-            "state": state or (closest_loc["state"] if closest_loc else ""),
-            "tier": closest_loc["tier"] if closest_loc else "Tier 2",
-            "cost_multiplier": closest_loc["cost_multiplier"] if closest_loc else 0.85,
-            "cghs_zone": closest_loc["cghs_zone"] if closest_loc else "Pan-India",
+            "lat": f_lat,
+            "lng": f_lng,
+            "locality": final_locality,
+            "city": final_city,
+            "district": final_district,
+            "state": final_state,
+            "pin_code": resolved_pin,  # Truthful PIN or None (never hardcode 500001)
+            "tier": tier,
+            "tier_label": get_tier_label(tier),
+            "cost_multiplier": cost_multiplier,
+            "cghs_zone": cghs_zone,
+            "matched_by": matched_by,
             "source": "gps_coordinates"
         }
 
@@ -417,18 +628,34 @@ def resolve_location(
     if pin_code and pin_code.strip():
         pin_clean = pin_code.strip()
         if len(pin_clean) == 6 and pin_clean.isdigit():
+            # Check known locality registry first for exact PIN
+            for loc in LOCALITY_REGISTRY:
+                if loc["pin_code"] == pin_clean:
+                    return {
+                        "lat": loc["lat"],
+                        "lng": loc["lng"],
+                        "locality": loc["locality"],
+                        "city": city or loc["city"],
+                        "district": district or loc["district"],
+                        "state": state or loc["state"],
+                        "pin_code": pin_clean,
+                        "tier": loc["tier"],
+                        "tier_label": get_tier_label(loc["tier"]),
+                        "cost_multiplier": loc["cost_multiplier"],
+                        "cghs_zone": loc["cghs_zone"],
+                        "matched_by": "exact_pin_match",
+                        "source": "pin_code_lookup"
+                    }
+
             prefix = pin_clean[:2]
             if prefix in PIN_PREFIX_MAP:
                 st, ct, lat, lng = PIN_PREFIX_MAP[prefix]
-                
-                # Check if matches specific known registry entry (e.g. 225001 -> Barabanki)
                 tier = "Tier 2"
                 cost_mult = 0.85
                 cghs_zone = "Pan-India"
                 resolved_city = ct
                 resolved_district = ct
 
-                # Check Barabanki specifically (225xxx)
                 if pin_clean.startswith("225"):
                     resolved_city = "Barabanki"
                     resolved_district = "Barabanki"
@@ -447,30 +674,58 @@ def resolve_location(
                 return {
                     "lat": lat,
                     "lng": lng,
+                    "locality": "",
                     "city": city or resolved_city,
                     "district": district or resolved_district,
                     "state": state or st,
                     "pin_code": pin_clean,
                     "tier": tier,
+                    "tier_label": get_tier_label(tier),
                     "cost_multiplier": cost_mult,
                     "cghs_zone": cghs_zone,
+                    "matched_by": "pin_prefix_match",
                     "source": "pin_code_lookup"
                 }
 
-    # 3. Check City against LOCATION_REGISTRY
+    # 3. Check City against LOCALITY_REGISTRY and LOCATION_REGISTRY
     if city and city.strip():
         city_lower = city.strip().lower()
+
+        # Check sub-localities (e.g. "nizampet")
+        for loc in LOCALITY_REGISTRY:
+            if loc["name"].lower() == city_lower or loc["locality"].lower() == city_lower:
+                return {
+                    "lat": loc["lat"],
+                    "lng": loc["lng"],
+                    "locality": loc["locality"],
+                    "city": loc["city"],
+                    "district": loc["district"],
+                    "state": loc["state"],
+                    "pin_code": loc["pin_code"],
+                    "tier": loc["tier"],
+                    "tier_label": get_tier_label(loc["tier"]),
+                    "cost_multiplier": loc["cost_multiplier"],
+                    "cghs_zone": loc["cghs_zone"],
+                    "matched_by": "locality_registry",
+                    "source": "locality_registry"
+                }
+
+        # Check canonical metro registry
         if city_lower in LOCATION_REGISTRY:
             reg = LOCATION_REGISTRY[city_lower]
             return {
                 "lat": reg["lat"],
                 "lng": reg["lng"],
+                "locality": "",
                 "city": reg["city"],
                 "district": reg["district"],
                 "state": reg["state"],
+                "pin_code": None,
                 "tier": reg["tier"],
+                "tier_label": get_tier_label(reg["tier"]),
                 "cost_multiplier": reg["cost_multiplier"],
                 "cghs_zone": reg["cghs_zone"],
+                "matched_by": "city_registry",
                 "source": "city_registry"
             }
 
@@ -480,12 +735,16 @@ def resolve_location(
                 return {
                     "lat": reg["lat"],
                     "lng": reg["lng"],
+                    "locality": "",
                     "city": reg["city"],
                     "district": reg["district"],
                     "state": reg["state"],
+                    "pin_code": None,
                     "tier": reg["tier"],
+                    "tier_label": get_tier_label(reg["tier"]),
                     "cost_multiplier": reg["cost_multiplier"],
                     "cghs_zone": reg["cghs_zone"],
+                    "matched_by": "city_partial_match",
                     "source": "city_partial_match"
                 }
 
@@ -494,31 +753,38 @@ def resolve_location(
         st_lower = state.strip().lower()
         if st_lower in STATE_CENTROIDS:
             lat, lng = STATE_CENTROIDS[st_lower]
-            # Match state name casing from list
             canonical_state = next((s["name"] for s in INDIAN_STATES_AND_UTS if s["name"].lower() == st_lower), state)
             capital = next((s["capital"] for s in INDIAN_STATES_AND_UTS if s["name"].lower() == st_lower), city or "")
             return {
                 "lat": lat,
                 "lng": lng,
+                "locality": "",
                 "city": city or capital,
                 "district": district or "",
                 "state": canonical_state,
+                "pin_code": None,
                 "tier": "Tier 2",
+                "tier_label": "Tier 2 State Capital",
                 "cost_multiplier": 0.85,
                 "cghs_zone": capital,
+                "matched_by": "state_centroid",
                 "source": "state_centroid"
             }
 
-    # 5. Default fallback: Neutral Pan-India default (Delhi / National Center)
-    # Never unconditionally force Hyderabad!
+    # 5. Default fallback: Neutral Pan-India default (National Capital New Delhi)
+    # Never unconditionally force Hyderabad or invent PIN codes!
     return {
         "lat": 28.6139,
         "lng": 77.2090,
+        "locality": "",
         "city": "New Delhi",
         "district": "New Delhi",
         "state": "Delhi",
+        "pin_code": None,
         "tier": "Tier 1",
+        "tier_label": "Tier 1 Metro",
         "cost_multiplier": 1.05,
         "cghs_zone": "Delhi",
+        "matched_by": "national_capital_fallback",
         "source": "national_capital_fallback"
     }

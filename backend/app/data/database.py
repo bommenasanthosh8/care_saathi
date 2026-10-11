@@ -5,6 +5,11 @@ from typing import List, Dict, Optional, Any
 from ..config import settings
 from .catalogue import TREATMENT_CATALOGUE
 from .seed_data import SEED_FACILITIES, SEED_SCHEMES, SEED_COST_OBSERVATIONS
+from .health_card_data import (
+    SEED_HEALTH_CARD_SCHEMES,
+    SEED_HEALTH_CARD_PACKAGES,
+    SEED_HOSPITAL_EMPANELMENTS
+)
 from ..models.schemas import Facility, Treatment, Scheme, CostObservation, CostBreakdown
 
 import logging
@@ -202,6 +207,92 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS payment_orders (
+        order_id TEXT PRIMARY KEY,
+        appointment_id TEXT NOT NULL,
+        user_id TEXT,
+        facility_name TEXT NOT NULL,
+        consultation_fee INTEGER NOT NULL,
+        registration_fee INTEGER NOT NULL,
+        tax_gst INTEGER NOT NULL,
+        total_amount_inr INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'INR',
+        status TEXT NOT NULL,
+        payment_id TEXT,
+        is_sandbox INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        verified_at INTEGER
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS otp_challenges (
+        phone TEXT PRIMARY KEY,
+        otp_hash TEXT NOT NULL,
+        attempts INTEGER DEFAULT 0,
+        expires_at INTEGER NOT NULL,
+        last_sent_at INTEGER NOT NULL,
+        is_verified INTEGER DEFAULT 0
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS health_card_schemes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL,
+        authority TEXT NOT NULL,
+        description TEXT NOT NULL,
+        applicable_states TEXT NOT NULL,
+        coverage_limit_inr TEXT NOT NULL,
+        official_portal TEXT NOT NULL,
+        helpline TEXT NOT NULL,
+        required_eligibility_info TEXT NOT NULL,
+        icon_type TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        last_verified_date TEXT NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS health_card_packages (
+        id TEXT PRIMARY KEY,
+        scheme_id TEXT NOT NULL,
+        treatment_id TEXT NOT NULL,
+        treatment_name TEXT NOT NULL,
+        specialty TEXT NOT NULL,
+        package_code TEXT NOT NULL,
+        package_rate_inr INTEGER NOT NULL,
+        is_cashless INTEGER DEFAULT 1,
+        pre_auth_required INTEGER DEFAULT 1,
+        inclusions TEXT NOT NULL,
+        exclusions_notes TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        last_verified_date TEXT NOT NULL
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS hospital_scheme_empanelments (
+        id TEXT PRIMARY KEY,
+        facility_id TEXT NOT NULL,
+        facility_name TEXT NOT NULL,
+        scheme_id TEXT NOT NULL,
+        empanelment_status TEXT NOT NULL,
+        verification_status TEXT NOT NULL,
+        specialties_covered TEXT NOT NULL,
+        specific_procedures_verified TEXT NOT NULL,
+        helpdesk_location TEXT,
+        helpdesk_phone TEXT,
+        source_name TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        last_verified_date TEXT NOT NULL,
+        notes TEXT,
+        updated_by TEXT DEFAULT 'system'
+    )
+    """)
+
     conn.commit()
 
     # Seed Judge Demo User if not present
@@ -290,6 +381,54 @@ def init_db():
                 c.source_name, c.source_url, c.last_updated,
                 json.dumps(c.key_assumptions), json.dumps(c.exclusions)
             ))
+
+    # Populate Health Card Schemes
+    for sch in SEED_HEALTH_CARD_SCHEMES:
+        cursor.execute("""
+        INSERT OR REPLACE INTO health_card_schemes (
+            id, name, category, authority, description, applicable_states,
+            coverage_limit_inr, official_portal, helpline,
+            required_eligibility_info, icon_type, is_active, last_verified_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            sch["id"], sch["name"], sch["category"], sch["authority"], sch["description"],
+            json.dumps(sch["applicable_states"]), sch["coverage_limit_inr"], sch["official_portal"],
+            sch["helpline"], json.dumps(sch["required_eligibility_info"]), sch["icon_type"],
+            sch["is_active"], sch["last_verified_date"]
+        ))
+
+    # Populate Health Card Packages
+    for pkg in SEED_HEALTH_CARD_PACKAGES:
+        cursor.execute("""
+        INSERT OR REPLACE INTO health_card_packages (
+            id, scheme_id, treatment_id, treatment_name, specialty, package_code,
+            package_rate_inr, is_cashless, pre_auth_required, inclusions,
+            exclusions_notes, source_url, last_verified_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            pkg["id"], pkg["scheme_id"], pkg["treatment_id"], pkg["treatment_name"],
+            pkg["specialty"], pkg["package_code"], pkg["package_rate_inr"],
+            pkg["is_cashless"], pkg["pre_auth_required"], json.dumps(pkg["inclusions"]),
+            json.dumps(pkg["exclusions_notes"]), pkg["source_url"], pkg["last_verified_date"]
+        ))
+
+    # Populate Hospital Scheme Empanelments
+    for emp in SEED_HOSPITAL_EMPANELMENTS:
+        cursor.execute("""
+        INSERT OR REPLACE INTO hospital_scheme_empanelments (
+            id, facility_id, facility_name, scheme_id, empanelment_status,
+            verification_status, specialties_covered, specific_procedures_verified,
+            helpdesk_location, helpdesk_phone, source_name, source_url,
+            last_verified_date, notes, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            emp["id"], emp["facility_id"], emp["facility_name"], emp["scheme_id"],
+            emp["empanelment_status"], emp["verification_status"],
+            json.dumps(emp["specialties_covered"]), json.dumps(emp["specific_procedures_verified"]),
+            emp.get("helpdesk_location", ""), emp.get("helpdesk_phone", ""),
+            emp["source_name"], emp["source_url"], emp["last_verified_date"],
+            emp.get("notes", ""), emp.get("updated_by", "system")
+        ))
 
     conn.commit()
     conn.close()
@@ -513,3 +652,130 @@ def get_cost_observations(treatment_id: str, facility_id: Optional[str] = None) 
     except Exception as e:
         logger.warning(f"Database query failed in get_cost_observations: {e}. Falling back to seed observations.")
         return [c for c in SEED_COST_OBSERVATIONS if c.treatment_id == treatment_id and (not facility_id or c.facility_id == facility_id)]
+
+# Health Card & Insurance Query Functions
+def get_health_card_schemes() -> List[Dict[str, Any]]:
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM health_card_schemes WHERE is_active = 1 ORDER BY category ASC, name ASC")
+        rows = cursor.fetchall()
+        conn.close()
+        schemes = []
+        for r in rows:
+            d = dict(r)
+            d["applicable_states"] = json.loads(d.get("applicable_states") or "[]")
+            d["required_eligibility_info"] = json.loads(d.get("required_eligibility_info") or "[]")
+            schemes.append(d)
+        return schemes
+    except Exception as e:
+        logger.warning(f"Error querying health_card_schemes: {e}")
+        return SEED_HEALTH_CARD_SCHEMES
+
+def get_health_card_scheme_by_id(scheme_id: str) -> Optional[Dict[str, Any]]:
+    schemes = get_health_card_schemes()
+    for s in schemes:
+        if s["id"] == scheme_id:
+            return s
+    return None
+
+def get_health_card_packages(scheme_id: Optional[str] = None, treatment_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        query = "SELECT * FROM health_card_packages WHERE 1=1"
+        params = []
+        if scheme_id:
+            query += " AND scheme_id = ?"
+            params.append(scheme_id)
+        if treatment_id:
+            query += " AND treatment_id = ?"
+            params.append(treatment_id)
+        query += " ORDER BY treatment_name ASC"
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        conn.close()
+        pkgs = []
+        for r in rows:
+            d = dict(r)
+            d["inclusions"] = json.loads(d.get("inclusions") or "[]")
+            d["exclusions_notes"] = json.loads(d.get("exclusions_notes") or "[]")
+            pkgs.append(d)
+        return pkgs
+    except Exception as e:
+        logger.warning(f"Error querying health_card_packages: {e}")
+        return [
+            p for p in SEED_HEALTH_CARD_PACKAGES
+            if (not scheme_id or p["scheme_id"] == scheme_id) and (not treatment_id or p["treatment_id"] == treatment_id)
+        ]
+
+def get_hospital_empanelments(facility_id: Optional[str] = None, scheme_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        query = "SELECT * FROM hospital_scheme_empanelments WHERE 1=1"
+        params = []
+        if facility_id:
+            query += " AND facility_id = ?"
+            params.append(facility_id)
+        if scheme_id:
+            query += " AND scheme_id = ?"
+            params.append(scheme_id)
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        conn.close()
+        emps = []
+        for r in rows:
+            d = dict(r)
+            d["specialties_covered"] = json.loads(d.get("specialties_covered") or "[]")
+            d["specific_procedures_verified"] = json.loads(d.get("specific_procedures_verified") or "[]")
+            emps.append(d)
+        return emps
+    except Exception as e:
+        logger.warning(f"Error querying hospital_scheme_empanelments: {e}")
+        return [
+            e for e in SEED_HOSPITAL_EMPANELMENTS
+            if (not facility_id or e["facility_id"] == facility_id) and (not scheme_id or e["scheme_id"] == scheme_id)
+        ]
+
+def save_or_update_hospital_empanelment(data: Dict[str, Any]) -> bool:
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        emp_id = data.get("id") or f"emp_{data['facility_id']}_{data['scheme_id']}"
+        cursor.execute("""
+        INSERT INTO hospital_scheme_empanelments (
+            id, facility_id, facility_name, scheme_id, empanelment_status,
+            verification_status, specialties_covered, specific_procedures_verified,
+            helpdesk_location, helpdesk_phone, source_name, source_url,
+            last_verified_date, notes, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            empanelment_status = excluded.empanelment_status,
+            verification_status = excluded.verification_status,
+            specialties_covered = excluded.specialties_covered,
+            specific_procedures_verified = excluded.specific_procedures_verified,
+            helpdesk_location = excluded.helpdesk_location,
+            helpdesk_phone = excluded.helpdesk_phone,
+            source_name = excluded.source_name,
+            source_url = excluded.source_url,
+            last_verified_date = excluded.last_verified_date,
+            notes = excluded.notes,
+            updated_by = excluded.updated_by
+        """, (
+            emp_id, data["facility_id"], data.get("facility_name", ""),
+            data["scheme_id"], data.get("empanelment_status", "empanelled"),
+            data.get("verification_status", "verified_procedure"),
+            json.dumps(data.get("specialties_covered", [])),
+            json.dumps(data.get("specific_procedures_verified", [])),
+            data.get("helpdesk_location", ""), data.get("helpdesk_phone", ""),
+            data.get("source_name", "Official Directory"),
+            data.get("source_url", ""), data.get("last_verified_date", "2026-03-15"),
+            data.get("notes", ""), data.get("updated_by", "admin")
+        ))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving hospital empanelment: {e}")
+        return False

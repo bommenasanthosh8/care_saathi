@@ -17,15 +17,6 @@ export const AnimatedRupeeCounter: React.FC<AnimatedRupeeCounterProps> = ({
   className = '',
   style = {}
 }) => {
-  // If zero and custom label is requested (e.g. Free / Subsidized)
-  if (value === 0 && freeSubsidizedText) {
-    return (
-      <span className={className} style={style}>
-        {freeSubsidizedText}
-      </span>
-    );
-  }
-
   // Check reduced motion preference
   const prefersReducedMotion = typeof window !== 'undefined' && 
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -34,6 +25,12 @@ export const AnimatedRupeeCounter: React.FC<AnimatedRupeeCounterProps> = ({
   const prevValueRef = useRef<number>(0);
 
   useEffect(() => {
+    if (value === 0 && freeSubsidizedText) {
+      setDisplayValue(0);
+      prevValueRef.current = 0;
+      return;
+    }
+
     if (prefersReducedMotion) {
       setDisplayValue(value);
       prevValueRef.current = value;
@@ -76,7 +73,15 @@ export const AnimatedRupeeCounter: React.FC<AnimatedRupeeCounterProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [value, duration, prefersReducedMotion]);
+  }, [value, duration, prefersReducedMotion, freeSubsidizedText]);
+
+  if (value === 0 && freeSubsidizedText) {
+    return (
+      <span className={className} style={style}>
+        {freeSubsidizedText}
+      </span>
+    );
+  }
 
   const formatted = Math.round(displayValue).toLocaleString('en-IN');
 

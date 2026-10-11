@@ -42,6 +42,8 @@ export interface LocationPayload {
   pinCode?: string;
   lat?: number;
   lng?: number;
+  isLiveGps?: boolean;
+  gpsAccuracy?: number;
 }
 
 export interface SearchState {
@@ -55,6 +57,8 @@ export interface SearchState {
   pinCode?: string;
   lat?: number;
   lng?: number;
+  isLiveGps?: boolean;
+  gpsAccuracy?: number;
   hospitalName: string;
   comparisonList: FacilityItem[];
   recentSearches: string[];
@@ -85,7 +89,7 @@ const defaultState: SearchState = {
   state: "Telangana",
   district: "Hyderabad",
   locality: "",
-  pinCode: "500001",
+  pinCode: "",
   lat: 17.3850,
   lng: 78.4867,
   hospitalName: "",
@@ -142,27 +146,43 @@ export const SearchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     lng?: number
   ) => {
     if (typeof cityOrPayload === 'object' && cityOrPayload !== null) {
-      setState(prev => ({
-        ...prev,
-        city: cityOrPayload.city,
-        state: cityOrPayload.state !== undefined ? cityOrPayload.state : prev.state,
-        district: cityOrPayload.district !== undefined ? cityOrPayload.district : prev.district,
-        locality: cityOrPayload.locality !== undefined ? cityOrPayload.locality : prev.locality,
-        pinCode: cityOrPayload.pinCode !== undefined ? cityOrPayload.pinCode : prev.pinCode,
-        lat: cityOrPayload.lat !== undefined ? cityOrPayload.lat : prev.lat,
-        lng: cityOrPayload.lng !== undefined ? cityOrPayload.lng : prev.lng,
-      }));
+      setState(prev => {
+        const isLive = Boolean(cityOrPayload.isLiveGps);
+        const cityChanged = cityOrPayload.city !== undefined && cityOrPayload.city !== prev.city;
+
+        return {
+          ...prev,
+          city: cityOrPayload.city || prev.city,
+          state: cityOrPayload.state !== undefined ? cityOrPayload.state : (cityChanged ? '' : prev.state),
+          district: cityOrPayload.district !== undefined ? cityOrPayload.district : (cityChanged ? '' : prev.district),
+          locality: cityOrPayload.locality !== undefined ? cityOrPayload.locality : (cityChanged ? '' : prev.locality),
+          // When live GPS is acquired, use resolved PIN or empty string; never keep stale manual PIN
+          pinCode: isLive ? (cityOrPayload.pinCode || '') : (cityOrPayload.pinCode !== undefined ? cityOrPayload.pinCode : (cityChanged ? '' : prev.pinCode)),
+          lat: cityOrPayload.lat !== undefined ? cityOrPayload.lat : (cityChanged ? undefined : prev.lat),
+          lng: cityOrPayload.lng !== undefined ? cityOrPayload.lng : (cityChanged ? undefined : prev.lng),
+          isLiveGps: isLive,
+          gpsAccuracy: isLive ? cityOrPayload.gpsAccuracy : undefined
+        };
+      });
     } else {
       const cityString: string = typeof cityOrPayload === 'string' ? cityOrPayload : '';
-      setState(prev => ({ 
-        ...prev, 
-        city: cityString, 
-        locality: locality !== undefined ? locality : prev.locality,
-        pinCode: pinCode !== undefined ? pinCode : prev.pinCode,
-        state: state !== undefined ? state : prev.state,
-        lat: lat !== undefined ? lat : prev.lat,
-        lng: lng !== undefined ? lng : prev.lng
-      }));
+      setState(prev => {
+        const cityChanged = Boolean(cityString && cityString !== prev.city);
+        const newLat = lat !== undefined ? lat : (cityChanged ? undefined : prev.lat);
+        const newLng = lng !== undefined ? lng : (cityChanged ? undefined : prev.lng);
+
+        return { 
+          ...prev, 
+          city: cityString, 
+          locality: locality !== undefined ? locality : (cityChanged ? '' : prev.locality),
+          pinCode: pinCode !== undefined ? pinCode : (cityChanged ? '' : prev.pinCode),
+          state: state !== undefined ? state : (cityChanged ? '' : prev.state),
+          lat: newLat,
+          lng: newLng,
+          isLiveGps: false,
+          gpsAccuracy: undefined
+        };
+      });
     }
   };
 

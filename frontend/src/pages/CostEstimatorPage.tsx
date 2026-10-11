@@ -7,6 +7,7 @@ import {
   MapPin, 
   CheckCircle2, 
   AlertCircle, 
+  AlertTriangle, 
   Info, 
   HelpCircle, 
   Layers, 
@@ -18,7 +19,11 @@ import {
   Printer,
   Share2,
   MessageSquare,
-  FileText
+  FileText,
+  ShieldCheck,
+  ExternalLink,
+  Compass,
+  PhoneCall
 } from 'lucide-react';
 import { api, CostEstimateDTO, TreatmentDTO, FacilityDTO } from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -68,6 +73,7 @@ export const CostEstimatorPage: React.FC = () => {
   const [medicineData, setMedicineData] = useState<MedicineCourseEstimateDTO | null>(null);
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [estimateError, setEstimateError] = useState<string | null>(null);
   const [estimateResult, setEstimateResult] = useState<CostEstimateDTO | null>(null);
   const [isBreakdownOpen, setIsBreakdownOpen] = useState<boolean>(false);
   const [isPrintOpen, setIsPrintOpen] = useState<boolean>(false);
@@ -85,6 +91,7 @@ export const CostEstimatorPage: React.FC = () => {
 
   const runEstimate = async () => {
     setIsLoading(true);
+    setEstimateError(null);
     try {
       const selectedT = treatmentsList.find(t => t.id === selectedTreatmentId);
       const treatmentName = selectedT ? selectedT.name : "Total Knee Replacement (TKR)";
@@ -101,8 +108,9 @@ export const CostEstimatorPage: React.FC = () => {
 
       setEstimateResult(res);
       setTreatment(selectedTreatmentId, treatmentName);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Cost estimate failed", err);
+      setEstimateError(err?.message || "Cost estimation unavailable for this procedure. Please choose a treatment from our verified catalogue.");
     } finally {
       setIsLoading(false);
     }
@@ -231,6 +239,40 @@ export const CostEstimatorPage: React.FC = () => {
             <span>Workflow A: Hospital-Specific Tariff</span>
           </motion.button>
         </div>
+
+        {/* Error Banner */}
+        {estimateError && !isLoading && (
+          <div style={{
+            padding: '16px 20px',
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: '12px',
+            color: '#991B1B',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <AlertTriangle size={20} color="#DC2626" />
+              <div>
+                <strong style={{ display: 'block', fontSize: '0.9rem' }}>Cost Estimation Notice</strong>
+                <span style={{ fontSize: '0.84rem' }}>{estimateError}</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={runEstimate}
+              className="btn btn-secondary btn-sm"
+              style={{ borderColor: '#F87171', color: '#991B1B', fontWeight: 600 }}
+            >
+              <RefreshCw size={13} style={{ marginRight: '6px' }} />
+              Retry Estimation
+            </button>
+          </div>
+        )}
 
         {/* "Your Estimate" Full-Width Summary Card */}
         {estimateResult && (
@@ -730,6 +772,184 @@ export const CostEstimatorPage: React.FC = () => {
                     tierComparisons={estimateResult.tier_comparisons}
                     treatmentName={estimateResult.canonical_treatment?.name || estimateResult.query_treatment}
                   />
+                )}
+
+                {/* 6.1 Applicable Health Schemes & Statutory Benefit Packages (Phase 4 & 6) */}
+                <div className="card cost-estimator-card-elevation" style={{
+                  background: 'var(--color-white)',
+                  border: '1px solid var(--color-border)',
+                  boxShadow: 'var(--shadow-md)',
+                  marginTop: '20px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <ShieldCheck size={20} color="var(--color-teal)" />
+                      <h4 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--color-navy)' }}>
+                        Applicable Health Schemes & Statutory Packages
+                      </h4>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => goToTab('schemes')}
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    >
+                      <span>Explore Health Card Finder</span>
+                      <ArrowRight size={13} />
+                    </button>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--color-text-grey)', marginBottom: '16px', lineHeight: 1.5 }}>
+                    Statutory packages matched for <strong>{estimateResult.canonical_treatment?.name || estimateResult.query_treatment}</strong> under National and State health protection policies.
+                  </p>
+
+                  {estimateResult.applicable_schemes && estimateResult.applicable_schemes.length > 0 ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px' }}>
+                      {estimateResult.applicable_schemes.map((sch, idx) => (
+                        <div
+                          key={sch.id || idx}
+                          style={{
+                            border: '1px solid #E2E8F0',
+                            borderRadius: 'var(--radius-md, 10px)',
+                            padding: '14px',
+                            backgroundColor: '#F8FAFC',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            gap: '8px'
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px', marginBottom: '6px' }}>
+                              <strong style={{ color: 'var(--color-navy)', fontSize: '0.95rem' }}>{sch.name}</strong>
+                              <span className="badge badge-teal" style={{ fontSize: '0.72rem' }}>{sch.status || 'Verified Package'}</span>
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--color-text-grey)', marginBottom: '6px' }}>
+                              Authority: {sch.authority}
+                            </div>
+                            {sch.package_code && (
+                              <div style={{ display: 'inline-block', backgroundColor: '#E0F2FE', color: '#0369A1', padding: '3px 7px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600, marginBottom: '6px' }}>
+                                Statutory Code: {sch.package_code}
+                              </div>
+                            )}
+                            <div style={{ fontSize: '0.82rem', color: '#166534', fontWeight: 600, marginBottom: '4px' }}>
+                              Cashless Limit: {sch.coverage_limit}
+                            </div>
+                            {sch.notes && (
+                              <p style={{ fontSize: '0.76rem', color: 'var(--color-text-grey)', margin: 0, lineHeight: 1.4 }}>
+                                {sch.notes}
+                              </p>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #E2E8F0', paddingTop: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Info size={12} />
+                            <span>Pre-authorization via hospital Aarogyamitra desk required</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ padding: '16px', borderRadius: '8px', backgroundColor: '#F1F5F9', fontSize: '0.82rem', color: '#475569' }}>
+                      No direct statutory package code mapped for this procedure. Private insurance TPAs or hospital-specific concessions may still apply.
+                    </div>
+                  )}
+                </div>
+
+                {/* 6.2 Suitable Nearby Facility Comparison Panel (Phase 6 & 7) */}
+                {estimateResult.comparable_facilities && estimateResult.comparable_facilities.length > 0 && (
+                  <div className="card cost-estimator-card-elevation" style={{
+                    background: 'var(--color-white)',
+                    border: '1px solid var(--color-border)',
+                    boxShadow: 'var(--shadow-md)',
+                    marginTop: '20px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Compass size={20} color="var(--color-teal)" />
+                        <h4 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--color-navy)' }}>
+                          Nearby Facilities Offering This Procedure
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => goToTab('hospitals')}
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        <span>View All on Map</span>
+                        <ArrowRight size={13} />
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {estimateResult.comparable_facilities.map((fac) => {
+                        const minC = fac.estimated_cost_min || (fac.tariff_detail?.min_cost) || estimateResult.overall_min;
+                        const maxC = fac.estimated_cost_max || (fac.tariff_detail?.max_cost) || estimateResult.overall_max;
+                        const dist = fac.road_distance_km !== undefined ? fac.road_distance_km : fac.distance_km;
+
+                        return (
+                          <div
+                            key={fac.id}
+                            style={{
+                              border: '1px solid #E2E8F0',
+                              borderRadius: 'var(--radius-md, 10px)',
+                              padding: '14px 16px',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'flex-start',
+                              flexWrap: 'wrap',
+                              gap: '12px',
+                              backgroundColor: '#FFFFFF',
+                              transition: 'box-shadow 0.2s ease'
+                            }}
+                          >
+                            <div style={{ flex: '1 1 300px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
+                                <strong style={{ fontSize: '1.02rem', color: 'var(--color-navy)' }}>{fac.name}</strong>
+                                <span className={`badge ${fac.ownership === 'Government' ? 'badge-teal' : fac.ownership === 'Charitable' ? 'badge-blue' : 'badge-navy'}`} style={{ fontSize: '0.72rem' }}>
+                                  {fac.ownership}
+                                </span>
+                                {fac.verification_status && (
+                                  <span className="badge" style={{ backgroundColor: '#DCFCE7', color: '#166534', fontSize: '0.7rem' }}>
+                                    ✓ Verified Facility
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '0.78rem', color: 'var(--color-text-grey)', marginBottom: '8px', flexWrap: 'wrap' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <MapPin size={13} />
+                                  {fac.locality ? `${fac.locality}, ` : ''}{fac.city} {dist !== undefined && dist > 0 ? `(${dist.toFixed(1)} km away)` : ''}
+                                </span>
+                                {fac.phone && fac.phone !== 'None' && (
+                                  <a href={`tel:${fac.phone}`} style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--color-teal-dark)', textDecoration: 'none' }}>
+                                    <PhoneCall size={13} />
+                                    <span>{fac.phone}</span>
+                                  </a>
+                                )}
+                              </div>
+
+                              {/* Transparent Explainable Recommendation (Phase 7) */}
+                              <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: '6px', padding: '6px 10px', fontSize: '0.76rem', color: '#15803D', lineHeight: 1.4 }}>
+                                <strong>Why recommended:</strong> {fac.why_this_hospital || fac.recommendation_reason || `Offers specialized care for ${estimateResult.canonical_treatment?.name || estimateResult.query_treatment} in ${fac.locality || fac.city}.`}
+                              </div>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', justifyContent: 'center', minWidth: '160px' }}>
+                              <span style={{ fontSize: '0.72rem', color: 'var(--color-text-grey)', textTransform: 'uppercase', fontWeight: 600 }}>
+                                Estimated Range
+                              </span>
+                              <span style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--color-navy)', whiteSpace: 'nowrap' }}>
+                                {minC === 0 ? '₹0 (Free / Govt)' : `₹${minC.toLocaleString('en-IN')}`} - ₹{maxC.toLocaleString('en-IN')}
+                              </span>
+                              <span style={{ fontSize: '0.7rem', color: 'var(--color-text-grey)', marginTop: '2px' }}>
+                                {fac.tariff_detail?.type ? `Tariff: ${fac.tariff_detail.type}` : 'Empanelled benchmark'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
 
                 {/* 7. Medicine Cost Estimator (NPPA Pharma Sahi Daam & Jan Aushadhi) */}

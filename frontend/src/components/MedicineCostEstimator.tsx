@@ -422,7 +422,7 @@ export const MedicineCostEstimator: React.FC<MedicineCostEstimatorProps> = ({
           formulation: m.matched_formulation || m.form || m.formulation || 'Tablet',
           quantity: m.quantity || 10,
           confidence: m.confidence !== undefined ? m.confidence : (m.is_verified ? 0.9 : 0.6),
-          is_verified: m.is_verified !== undefined ? m.is_verified : true,
+          is_verified: m.is_verified !== undefined ? m.is_verified : false,
           match_score: m.match_score !== undefined ? m.match_score : 1.0,
           raw_extracted_text: m.name_as_written || m.visibly_extracted_text || m.name,
           alternatives: m.alternatives || []
@@ -430,7 +430,14 @@ export const MedicineCostEstimator: React.FC<MedicineCostEstimatorProps> = ({
 
         setSelectedItems(extracted);
         setIsAwaitingConfirmation(true);
-        setOcrSuccessMsg(`Successfully identified ${extracted.length} medication(s) with Google Gemini Vision. Please verify medicine names & dosage strengths below.`);
+
+        const verifiedCount = extracted.filter(m => m.is_verified).length;
+        const unverifiedCount = extracted.length - verifiedCount;
+        if (unverifiedCount > 0) {
+          setOcrSuccessMsg(`${extracted.length} medicine(s) detected (${verifiedCount} verified; ${unverifiedCount} need verification). Please verify medicine names & dosage strengths below.`);
+        } else {
+          setOcrSuccessMsg(`Successfully identified ${extracted.length} medicine(s). Please verify quantities & confirm below.`);
+        }
       } else {
         setOcrErrorMsg('No identifiable medicine names detected in the uploaded prescription.');
         setShowRawTextPanel(true);
@@ -1269,6 +1276,27 @@ export const MedicineCostEstimator: React.FC<MedicineCostEstimatorProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Unverified items exclusion advisory */}
+          {estimateData.has_unverified_items && (
+            <div style={{
+              marginTop: '12px',
+              padding: '8px 12px',
+              backgroundColor: '#FFFBEB',
+              border: '1px solid #FDE68A',
+              borderRadius: '8px',
+              fontSize: '0.76rem',
+              color: '#92400E',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              <AlertTriangle size={13} color="#D97706" style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Notice:</strong> Totals and potential generic savings include verified statutory medicines only. {estimateData.unverified_items_count ? `${estimateData.unverified_items_count} unverified medicine(s) are excluded` : 'Unverified medicines are excluded'} from calculations until confirmed or edited.
+              </span>
+            </div>
+          )}
 
           {/* Official Source Reference Link */}
           <div style={{

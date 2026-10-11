@@ -3,10 +3,12 @@ import os
 import math
 from typing import List, Tuple, Optional
 from PIL import Image, ImageOps, ImageEnhance
-import pillow_heif
-
-# Register HEIC opener once
-pillow_heif.register_heif_opener()
+try:
+    import pillow_heif
+    # Register HEIC opener once
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pillow_heif = None
 
 try:
     import pymupdf as fitz
@@ -23,10 +25,14 @@ ALLOWED_MIME_TYPES = {
     "application/pdf", "application/octet-stream"
 }
 
-def validate_prescription_file(filename: str, content_type: Optional[str], file_size: int) -> Tuple[bool, Optional[str]]:
+def validate_prescription_file(filename: str, content_type: Optional[str], file_size: int, file_bytes: Optional[bytes] = None) -> Tuple[bool, Optional[str]]:
     """
-    Validates file format and size (< 10MB).
+    Validates file format, size (< 10MB), and image integrity.
+    Handles unsupported, corrupted, or empty files gracefully.
     """
+    if file_size <= 0:
+        return False, "Uploaded file is empty (0 bytes). Please upload a valid prescription document."
+
     if file_size > MAX_FILE_SIZE_BYTES:
         return False, f"File size ({file_size / (1024*1024):.1f} MB) exceeds maximum limit of 10 MB."
     
@@ -34,6 +40,13 @@ def validate_prescription_file(filename: str, content_type: Optional[str], file_
     if ext not in ALLOWED_EXTENSIONS:
         return False, f"Unsupported file type '{ext}'. Please upload JPG, PNG, WEBP, HEIC, or PDF."
     
+    if file_bytes is not None and len(file_bytes) > 0 and ext != ".pdf":
+        try:
+            with Image.open(io.BytesIO(file_bytes)) as test_img:
+                test_img.verify()
+        except Exception:
+            return False, "Corrupted or unreadable image file. Please upload a clear, valid JPG, PNG, or WEBP prescription."
+
     return True, None
 
 def preprocess_single_image(img: Image.Image) -> Image.Image:

@@ -262,10 +262,12 @@ def geocode_address(address: Optional[str] = None, lat: Optional[float] = None, 
     if not api_key:
         # Fallback offline coordinate mapping
         if address:
+            from ..data.india_geography import resolve_location
+            res = resolve_location(city=address)
             return {
                 "results": [{
-                    "formatted_address": address,
-                    "geometry": {"location": {"lat": 17.4399, "lng": 78.4806}}
+                    "formatted_address": f"{res['city']}, {res['state']}" if res.get('state') else address,
+                    "geometry": {"location": {"lat": res["lat"], "lng": res["lng"]}}
                 }],
                 "fallback_mode": True
             }

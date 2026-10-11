@@ -24,6 +24,7 @@ interface LandingPageProps {
   onExploreCost: () => void;
   onExploreHospitals: () => void;
   onExploreSchemes: () => void;
+  onExploreHealthCards?: () => void;
   onHowItWorks: () => void;
   onOpenVoice?: () => void;
   onOpenRx?: () => void;
@@ -34,6 +35,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onExploreCost,
   onExploreHospitals,
   onExploreSchemes,
+  onExploreHealthCards,
   onHowItWorks,
   onOpenVoice,
   onOpenRx
@@ -158,6 +160,58 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Featured Health Card Hospital Finder Callout Banner */}
+          {onExploreHealthCards && (
+            <div style={{
+              marginTop: '40px',
+              padding: '28px 32px',
+              borderRadius: '20px',
+              background: 'linear-gradient(135deg, #F0FDF4 0%, #E6F4EA 100%)',
+              border: '1.5px solid #A8DAB5',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '20px'
+            }}>
+              <div style={{ maxWidth: '720px' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 10px', borderRadius: '50px', backgroundColor: '#0D7B60', color: '#FFFFFF', fontSize: '0.74rem', fontWeight: 700, marginBottom: '10px' }}>
+                  <ShieldCheck size={13} />
+                  NEW: HEALTH CARD FINDER
+                </div>
+                <h3 style={{ fontSize: '1.35rem', fontWeight: 800, color: '#102A36', margin: '0 0 6px 0' }}>
+                  Have an Aarogyasri, PM-JAY, EHS, or Insurance Card?
+                </h3>
+                <p style={{ margin: 0, fontSize: '0.94rem', color: '#334155', lineHeight: 1.5 }}>
+                  Discover exactly which hospitals in your district accept your specific card for your required surgery, with verified statutory package rates and zero out-of-pocket surprise calculations.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={onExploreHealthCards}
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  backgroundColor: '#0D7B60',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontSize: '0.94rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 4px 14px rgba(13, 123, 96, 0.25)',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <span>Find Empanelled Hospitals</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

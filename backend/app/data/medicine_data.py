@@ -80,6 +80,57 @@ MEDICINE_DATABASE: List[Dict[str, Any]] = [
         "is_nlem": True
     },
     {
+        "id": "med_metoprolol_50_er",
+        "brand_name": "Metoprolol Succinate 50 mg ER",
+        "generic_name": "Metoprolol Succinate",
+        "strength": "50 mg",
+        "formulation": "ER Tablets",
+        "pack_size": 30,
+        "mrp_branded": 168.00,
+        "nppa_ceiling_per_unit": 5.60,
+        "jan_aushadhi_per_unit": 1.60,
+        "manufacturer": "AstraZeneca / Sun Pharma",
+        "generic_alternative": "Metoprolol Extended Release Tablets IP 50mg (PMBJP)",
+        "source": "NPPA Sahi Daam & PMBJP Schedule",
+        "source_url": "https://nppaipdms.gov.in/NPPA/PharmaSahiDaam/searchMedicine",
+        "last_updated": "March 2026",
+        "is_nlem": True
+    },
+    {
+        "id": "med_aspirin_81_ec",
+        "brand_name": "Aspirin 81 mg Enteric Coated",
+        "generic_name": "Aspirin",
+        "strength": "81 mg",
+        "formulation": "Enteric Coated Tablets",
+        "pack_size": 90,
+        "mrp_branded": 180.00,
+        "nppa_ceiling_per_unit": 2.00,
+        "jan_aushadhi_per_unit": 0.40,
+        "manufacturer": "Bayer / USV Ltd",
+        "generic_alternative": "Aspirin Gastro-Resistant Tablets IP 75mg/81mg (PMBJP)",
+        "source": "NPPA Sahi Daam & PMBJP Schedule",
+        "source_url": "https://nppaipdms.gov.in/NPPA/PharmaSahiDaam/searchMedicine",
+        "last_updated": "March 2026",
+        "is_nlem": True
+    },
+    {
+        "id": "med_aspirin_75",
+        "brand_name": "Ecosprin 75",
+        "generic_name": "Aspirin",
+        "strength": "75 mg",
+        "formulation": "Enteric Coated Tablets",
+        "pack_size": 14,
+        "mrp_branded": 5.50,
+        "nppa_ceiling_per_unit": 0.39,
+        "jan_aushadhi_per_unit": 0.15,
+        "manufacturer": "USV Ltd",
+        "generic_alternative": "Aspirin Gastro-Resistant Tablets IP 75mg (PMBJP)",
+        "source": "NPPA NLEM Drug Price Order",
+        "source_url": "https://nppaipdms.gov.in/NPPA/PharmaSahiDaam/searchMedicine",
+        "last_updated": "March 2026",
+        "is_nlem": True
+    },
+    {
         "id": "med_atorva_20",
         "brand_name": "Atorva 20",
         "generic_name": "Atorvastatin",
@@ -477,8 +528,11 @@ def calculate_course_cost(items: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "status_note": "Rate not available, please verify on NPPA portal"
             })
 
-    savings = max(0.0, round(total_branded - total_jan_aushadhi, 2))
-    savings_pct = round((savings / total_branded * 100)) if total_branded > 0 else 0
+    verified_count = sum(1 for it in detailed_items if it["verified"])
+    unverified_count = sum(1 for it in detailed_items if not it["verified"])
+
+    savings = max(0.0, round(total_branded - total_jan_aushadhi, 2)) if verified_count > 0 else 0.0
+    savings_pct = round((savings / total_branded * 100)) if (verified_count > 0 and total_branded > 0) else 0
 
     return {
         "items": detailed_items,
@@ -488,6 +542,9 @@ def calculate_course_cost(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "potential_generic_savings": savings,
         "potential_savings_percentage": savings_pct,
         "price_source_disclaimer": "Prices sourced from NPPA Pharma Sahi Daam & PMBJP Janaushadhi rate card. Substitution must be verified by a licensed pharmacist or prescribing clinician.",
-        "has_unverified_items": any(not it["verified"] for it in detailed_items)
+        "has_unverified_items": unverified_count > 0,
+        "verified_items_count": verified_count,
+        "unverified_items_count": unverified_count,
+        "unverified_items_excluded_from_total": unverified_count > 0
     }
 

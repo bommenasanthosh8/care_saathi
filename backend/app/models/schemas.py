@@ -261,6 +261,9 @@ class PrescriptionOCRResponse(BaseModel):
     date: Optional[str] = None
     unreadable_parts: List[str] = []
     source: Optional[str] = "gemini_vision"
+    canonical_treatment_id: Optional[str] = None
+    canonical_treatment_name: Optional[str] = None
+    available_treatment_matches: List[Dict[str, str]] = []
 
 class SpeechTranscribeRequest(BaseModel):
     audio_base64: Optional[str] = None
@@ -454,3 +457,179 @@ class SavedComparisonItem(BaseModel):
     facility_ids: List[str]
     treatment_name: str
     created_at: str
+
+# --- Health Card & Insurance Hospital Finder Schemas ---
+class HealthCardSchemeDTO(BaseModel):
+    id: str
+    name: str
+    short_code: Optional[str] = None
+    category: str  # government, state_government, private_insurance, employer_scheme
+    authority: str = "Government of India / State Health Authority"
+    description: str
+    applicable_states: List[str] = []
+    state_applicability: Optional[str] = None
+    coverage_limit_inr: str = "Statutory Package Tariff"
+    max_coverage_inr: Optional[int] = None
+    cashless_mode: Optional[str] = "100% Cashless"
+    official_portal: str = ""
+    official_portal_url: Optional[str] = None
+    helpline: str = "104"
+    helpline_number: Optional[str] = None
+    required_eligibility_info: List[str] = []
+    eligibility_summary: Optional[str] = None
+    verification_doc_needed: Optional[str] = None
+    icon_type: str = "shield"
+    is_active: bool = True
+    last_verified_date: str = "2026-03-15"
+
+class HealthCardPackageDTO(BaseModel):
+    id: str
+    scheme_id: str
+    treatment_id: str
+    treatment_name: str
+    package_name: Optional[str] = None
+    specialty: str
+    package_code: Optional[str] = None
+    package_rate_inr: Optional[int] = None
+    statutory_rate_inr: Optional[int] = None
+    is_cashless: bool = True
+    pre_auth_required: bool = True
+    covered_days: Optional[int] = None
+    includes_implants: Optional[bool] = None
+    inclusions: List[str] = []
+    exclusions_notes: List[str] = []
+    exclusions_summary: Optional[str] = None
+    source_name: str = "Official Gazette"
+    source_url: str = ""
+    last_verified_date: str = "2026-03-15"
+
+class HealthCardSearchRequest(BaseModel):
+    scheme_id: str = Field(..., description="ID of the health card or insurance scheme")
+    treatment_id: Optional[str] = Field(None, description="ID of requested treatment or surgery")
+    state: Optional[str] = Field("Telangana", description="Selected state")
+    city: Optional[str] = Field(None, description="Selected city or district")
+    city_or_district: Optional[str] = Field(None, description="Alias for city")
+    locality: Optional[str] = Field(None, description="Selected locality")
+    lat: Optional[float] = Field(None, description="User latitude for distance calculation")
+    lng: Optional[float] = Field(None, description="User longitude for distance calculation")
+    radius_km: Optional[float] = Field(50.0, description="Search radius in kilometers")
+    verified_only: Optional[bool] = Field(False, description="Filter only to procedure-verified hospitals")
+    ownership: Optional[str] = Field(None, description="Filter by Government, Private, or Charitable/Trust")
+    sort_by: Optional[str] = Field("verification", description="Sort by verification, distance, cost, or rating")
+
+class HospitalHealthCardMatchDTO(BaseModel):
+    facility_id: str
+    facility_name: str
+    address: str
+    locality: str
+    city: str
+    state: str
+    lat: float
+    lng: float
+    distance_km: Optional[float] = None
+    ownership: str
+    facility_class: str = "Standard"
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    rating: Optional[float] = None
+    scheme_id: str
+    scheme_name: str
+    treatment_id: Optional[str] = None
+    treatment_name: Optional[str] = None
+    package_name: Optional[str] = None
+    empanelment_status: str = "empanelled"
+    verification_status: str = "verified_procedure"
+    verification_label: str = "Verified for this procedure"
+    verification_status_label: Optional[str] = None
+    is_verified_procedure: bool = False
+    is_scheme_empanelled: bool = True
+    package_code: Optional[str] = None
+    package_rate_inr: Optional[int] = None
+    scheme_rate_inr: Optional[int] = None
+    estimated_gross_cost_inr: Optional[int] = None
+    estimated_scheme_coverage_inr: Optional[int] = None
+    estimated_out_of_pocket_min: Optional[int] = 0
+    estimated_out_of_pocket_max: Optional[int] = 0
+    estimated_patient_out_of_pocket_inr: Optional[int] = 0
+    cost_note: Optional[str] = None
+    coverage_notes: Optional[str] = None
+    is_cashless: bool = True
+    helpdesk_location: Optional[str] = None
+    helpdesk_phone: Optional[str] = None
+    source_name: str = "Official Directory"
+    official_source_name: Optional[str] = None
+    source_url: str = ""
+    official_source_url: Optional[str] = None
+    last_verified_date: str = "2026-03-15"
+    last_verified: Optional[str] = None
+    notes: Optional[str] = None
+    questions_to_ask: List[str] = []
+    image_url: Optional[str] = None
+
+class HealthCardSearchResponse(BaseModel):
+    total_found: int
+    total_results: Optional[int] = None
+    verified_count: int
+    verified_procedure_count: Optional[int] = None
+    scheme_empanelled_count: Optional[int] = None
+    scheme: HealthCardSchemeDTO
+    treatment: Optional[Dict[str, Any]] = None
+    package_info: Optional[HealthCardPackageDTO] = None
+    hospitals: List[HospitalHealthCardMatchDTO] = []
+    results: List[HospitalHealthCardMatchDTO] = []
+    disclaimer: str = "Verified from official statutory registries. Final approval subject to pre-authorization."
+    active_filters: Dict[str, Any] = {}
+
+class HospitalHealthCardProfileResponse(BaseModel):
+    facility: Facility
+    empanelments: List[Dict[str, Any]] = []
+    empanelled_schemes_summary: List[Dict[str, Any]] = []
+    selected_scheme: Optional[HealthCardSchemeDTO] = None
+    selected_package: Optional[HealthCardPackageDTO] = None
+    matching_package: Optional[HealthCardPackageDTO] = None
+    empanelment_detail: Optional[Dict[str, Any]] = None
+    verification_status: str = "verified_procedure"
+    verification_status_label: str = "Verified for this procedure"
+    pre_travel_checklist: List[str] = []
+    questions_to_ask: List[str] = []
+    documents_required: List[str] = []
+    helpline_number: Optional[str] = None
+    official_portal_url: Optional[str] = None
+
+class AdminEmpanelmentUpdateRequest(BaseModel):
+    facility_id: str
+    scheme_id: str
+    empanelment_status: str = "empanelled"
+    verification_status: str = "verified_procedure"
+    specialties_covered: List[str] = []
+    specific_procedures_verified: List[str] = []
+    helpdesk_location: Optional[str] = None
+    helpdesk_phone: Optional[str] = None
+    source_name: str = "Official Directory"
+    official_source_name: Optional[str] = None
+    source_url: str = ""
+    official_source_url: Optional[str] = None
+    notes: Optional[str] = None
+
+class DataQualityReportResponse(BaseModel):
+    database_path: str
+    database_size_bytes: int
+    total_facilities: int
+    facilities_with_gps: int
+    facilities_missing_contact: int
+    total_treatments: int
+    diagnostics_count: int
+    surgical_count: int
+    total_schemes: int
+    total_packages: int
+    packages_with_statutory_codes: int
+    total_empanelments: int
+    empanelments_verified_procedure: int
+    empanelments_needs_confirmation: int
+    total_cost_observations: int
+    official_published_tariffs_count: int
+    reference_estimates_count: int
+    stale_records_count: int
+    audit_timestamp: str
+    data_provenance: List[Dict[str, str]]
+    anomalies_detected: List[str]

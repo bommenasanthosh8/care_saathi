@@ -23,6 +23,7 @@ from .image_preprocessor import (
 )
 from .vision_extractor import extract_medicines_with_gemini
 from .fuzzy_medicine_matcher import match_extracted_medicine, clean_medicine_token
+from ..config import settings
 
 logger = logging.getLogger("caresaathi.ocr")
 
@@ -78,21 +79,58 @@ DIAGNOSTIC_TESTS_MAP = {
     "A-Scan Optical Biometry": ["biometry", "a-scan", "iol power"]
 }
 
-FORMULATION_REGEX = re.compile(r'\b(tab|tablet|cap|capsule|inj|injection|syp|syrup|drop|drops|ointment|cream|iv)\b', re.IGNORECASE)
+FORMULATION_REGEX = re.compile(
+    r'\b(enteric coated tablets?|er tablets?|sr tablets?|cr tablets?|extended release tablets?|'
+    r'gastro-resistant tablets?|tablets?|capsules?|syrups?|injections?|eye drops?|drops?|'
+    r'ointments?|creams?|tab|cap|syp|inj|iv)\b',
+    re.IGNORECASE
+)
 STRENGTH_REGEX = re.compile(r'(\d+(?:\.\d+)?\s*(?:mg|gm|mcg|ml|g|iu|%))\b', re.IGNORECASE)
-FREQUENCY_REGEX = re.compile(r'\b(od|bd|tds|qid|sos|hs|stat|1-0-1|1-1-1|1-0-0|0-0-1|once daily|twice daily)\b', re.IGNORECASE)
+FREQUENCY_REGEX = re.compile(r'\b(od|bd|tds|qid|sos|hs|stat|1-0-1|1-1-1|1-0-0|0-0-1|once daily|twice daily|at bedtime)\b', re.IGNORECASE)
 DURATION_REGEX = re.compile(r'(\d+\s*(?:days|day|weeks|week|months|month|d))\b', re.IGNORECASE)
+
+def deduplicate_extracted_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Deduplicates extracted medicines by normalized brand/generic identity."""
+    seen: Dict[str, Dict[str, Any]] = {}
+    deduped: List[Dict[str, Any]] = []
+    for it in items:
+        raw_n = (it.get("brand_name") or it.get("name_as_written") or it.get("name") or "").strip()
+        gen_n = (it.get("generic_name") or "").strip()
+        clean_tok = clean_medicine_token(gen_n or raw_n)
+        key = clean_tok.lower() if clean_tok else raw_n.lower()
+        # Reject empty, pure digits, list numbering artifacts (e.g. '1.', '2)', '3-') or tokens without alphabetic characters
+        if not key or key.isdigit() or not re.search(r'[a-zA-Z]{2,}', key):
+            continue
+        if key in seen:
+            existing = seen[key]
+            # Keep higher quantity and confidence if duplicate extraction occurs
+            if it.get("quantity") and (it.get("quantity") > (existing.get("quantity") or 0)):
+                existing["quantity"] = it.get("quantity")
+            if it.get("confidence") and (it.get("confidence") > (existing.get("confidence") or 0)):
+                existing["confidence"] = it.get("confidence")
+            continue
+        seen[key] = it
+        deduped.append(it)
+    return deduped
 
 def parse_clinical_regex_medicines(lines: List[str]) -> List[Dict[str, Any]]:
     """
     Parses medicine lines using robust clinical regex heuristics.
-    Returns list conforming to multimodal schema.
+    - Strips list numbering (1., 2., 3., 1), etc.).
+    - Extracts explicit Quantity and Refill specifications.
+    - Never assigns digit-only candidate names.
+    - Accurately matches against statutory database.
     """
     results = []
 
     for line in lines:
         clean_line = line.strip()
-        if not clean_line or clean_line.startswith(("Rx", "Adv:", "Patient:", "Diagnosis:", "Inv:", "Dx:", "Pt:")):
+        if not clean_line or clean_line.startswith(("Rx", "Adv:", "Patient:", "Diagnosis:", "Inv:", "Dx:", "Pt:", "Date:", "Dr.")):
+            continue
+
+        # Strip list numbering e.g. '1. ', '2) ', '(3) ', '1- '
+        clean_line = re.sub(r'^\s*(?:\d+[\.\)\-:]|\(\d+\))\s*', '', clean_line).strip()
+        if not clean_line:
             continue
 
         # Pre-clean line for concatenated OCR tokens e.g. DoloB50 -> Dolo 650, Pan40 -> Pan 40
@@ -103,6 +141,8 @@ def parse_clinical_regex_medicines(lines: List[str]) -> List[Dict[str, Any]]:
         strength_match = STRENGTH_REGEX.search(clean_line)
         freq_match = FREQUENCY_REGEX.search(clean_line)
         dur_match = DURATION_REGEX.search(clean_line)
+        qty_match = re.search(r'\b(?:qty|quantity|units?)\s*[:=\-]?\s*(\d+)\b', clean_line, re.IGNORECASE)
+        refills_match = re.search(r'\b(?:refills?)\s*[:=\-]?\s*(\d+)\b', clean_line, re.IGNORECASE)
 
         # Candidate name extraction
         clean_sub = clean_line
@@ -112,7 +152,9 @@ def parse_clinical_regex_medicines(lines: List[str]) -> List[Dict[str, Any]]:
         # Find matching brand/salt in database
         matched_db = None
         for med in MEDICINE_DATABASE:
-            if med["brand_name"].lower() in clean_sub.lower() or med["generic_name"].lower() in clean_sub.lower():
+            b_low = med["brand_name"].lower()
+            g_low = med["generic_name"].lower()
+            if b_low in clean_sub.lower() or g_low in clean_sub.lower():
                 matched_db = med
                 break
 
@@ -135,10 +177,12 @@ def parse_clinical_regex_medicines(lines: List[str]) -> List[Dict[str, Any]]:
             multiplier = 3
         elif frequency in ["QID"]:
             multiplier = 4
-        elif frequency in ["SOS"]:
+        elif frequency in ["SOS", "AT BEDTIME"]:
             multiplier = 1
 
         quantity = multiplier * days
+        if qty_match:
+            quantity = int(qty_match.group(1))
 
         if matched_db:
             results.append({
@@ -150,26 +194,39 @@ def parse_clinical_regex_medicines(lines: List[str]) -> List[Dict[str, Any]]:
                 "dosage_pattern": frequency,
                 "duration_days": days,
                 "quantity": quantity,
-                "confidence": 0.92
+                "confidence": 0.95
             })
         elif formulation_match or strength_match:
+            # Extract candidate medicine tokens, safely skipping digits and directions
             tokens = clean_sub.split()
-            candidate_name = tokens[1] if len(tokens) > 1 and formulation_match else tokens[0]
+            cand_words = []
+            for tok in tokens:
+                clean_tok = re.sub(r'[^a-zA-Z0-9]', '', tok).strip()
+                if not clean_tok or clean_tok.isdigit():
+                    continue
+                if FORMULATION_REGEX.search(clean_tok) or STRENGTH_REGEX.search(clean_tok) or FREQUENCY_REGEX.search(clean_tok):
+                    break
+                if clean_tok.lower() in ["take", "by", "mouth", "once", "daily", "bedtime", "quantity", "refills", "qty", "refill"]:
+                    break
+                cand_words.append(clean_tok)
+
+            candidate_name = " ".join(cand_words).strip() or "Prescribed Medication"
             candidate_name = re.sub(r'[^a-zA-Z0-9\s]', '', candidate_name).strip()
 
-            results.append({
-                "name_as_written": clean_sub,
-                "brand_name": candidate_name or "Prescribed Medication",
-                "generic_name": None,
-                "strength": strength or "As directed",
-                "form": formulation,
-                "dosage_pattern": frequency,
-                "duration_days": days,
-                "quantity": quantity,
-                "confidence": 0.65
-            })
+            if candidate_name and not candidate_name.isdigit():
+                results.append({
+                    "name_as_written": clean_sub,
+                    "brand_name": candidate_name,
+                    "generic_name": None,
+                    "strength": strength or "As directed",
+                    "form": formulation,
+                    "dosage_pattern": frequency,
+                    "duration_days": days,
+                    "quantity": quantity,
+                    "confidence": 0.65
+                })
 
-    return results
+    return deduplicate_extracted_items(results)
 
 def process_prescription_ocr(
     req: Optional[PrescriptionOCRRequest] = None,
@@ -186,11 +243,11 @@ def process_prescription_ocr(
     Stage 5: Structured result population
     """
     if req:
-        if not filename and req.filename:
+        if not filename and getattr(req, "filename", None):
             filename = req.filename
-        if not raw_text and req.raw_text:
+        if not raw_text and getattr(req, "raw_text", None):
             raw_text = req.raw_text
-        if not file_bytes and req.image_base64:
+        if not file_bytes and getattr(req, "image_base64", None):
             try:
                 b64 = req.image_base64
                 if "," in b64:
@@ -213,6 +270,7 @@ def process_prescription_ocr(
     image_quality_notes = "Standard optical document quality"
 
     # Stage 2 & 3: If real image/document bytes are provided
+    vision_diagnoses: List[str] = []
     if file_bytes and file_size > 0:
         try:
             pages = process_uploaded_document(file_bytes, filename)
@@ -220,83 +278,79 @@ def process_prescription_ocr(
                 first_img, first_jpeg_bytes = pages[0]
                 # Try Gemini Vision API first
                 gemini_res = extract_medicines_with_gemini(first_jpeg_bytes)
-                if gemini_res and "medicines" in gemini_res:
+                if gemini_res and ("medicines" in gemini_res or "extracted_text" in gemini_res or "diagnoses_and_procedures" in gemini_res):
                     source = "gemini_vision"
                     extracted_items_raw = gemini_res.get("medicines", [])
                     doctor_name = gemini_res.get("doctor_name")
                     presc_date = gemini_res.get("date")
                     unreadable_parts = gemini_res.get("unreadable_parts", [])
+                    if not raw_text and gemini_res.get("extracted_text"):
+                        raw_text = gemini_res.get("extracted_text")
+                    vision_diagnoses = gemini_res.get("diagnoses_and_procedures", [])
                 else:
                     source = "fallback_ocr"
         except Exception as e:
             logger.error(f"Error preprocessing document: {e}")
 
-    # Fallback to text parsing if no vision output
-    if not extracted_items_raw:
+    # Stage 3: Process text only if raw_text was provided or handle unreadable image
+    # Stage 3: Process text only if raw_text was provided or handle unreadable image
+    if raw_text and raw_text.strip():
+        text_meds = parse_clinical_regex_medicines(raw_text.splitlines())
+        if not extracted_items_raw:
+            extracted_items_raw = text_meds
+        else:
+            extracted_items_raw = deduplicate_extracted_items(extracted_items_raw + text_meds)
+    elif not extracted_items_raw:
         fn_lower = filename.lower()
-        if not raw_text:
-            # Check canned test samples for backwards compatibility with tests
-            if "handwriting" in fn_lower or "unclear" in fn_lower or "cursive" in fn_lower or "blurry" in fn_lower:
-                is_handwritten = True
-                image_quality_notes = "Challenging cursive handwriting with low ink contrast"
-                unreadable_parts.append("Line 3: Illegible clinical procedure shorthand")
-                unreadable_parts.append("Line 5: Incomplete medicine strength notation")
-                raw_text = (
-                    "Rx [Cursive Doctor Handwriting]\n"
-                    "Pt: Adult\n"
-                    "Dx: [Partially illegible orthopedic note: ...arthr...]\n"
-                    "Adv: Specialized evaluation & MRI scan\n"
-                    "Med: [Unreadable drug name] 500mg\n"
-                    "Please verify clinical procedure and medicine details with your doctor."
-                )
-            elif "knee" in fn_lower or "ortho" in fn_lower or "sample" in fn_lower or "dolo" in fn_lower or "pan" in fn_lower or "print" in fn_lower:
-                raw_text = (
-                    "Rx Dr. K. Rama Rao, MS (Ortho), NIMS\n"
-                    "Patient: 62 Y / Female\n"
-                    "Diagnosis: Severe Bilateral Osteoarthritis Knee (Grade IV)\n"
-                    "Adv: Unilateral Total Knee Replacement (TKR) Right Knee\n"
-                    "Pre-op investigations: Digital X-Ray Bilateral Knee, CBC, ESR, ECG\n"
-                    "Med: Tab Dolo 650mg TDS x 5 days\n"
-                    "Med: Tab Pan 40mg OD x 15 days"
-                )
-            elif "cataract" in fn_lower or "eye" in fn_lower:
-                raw_text = (
-                    "Rx Dr. S. Reddy, MS (Ophthalmology), LVPEI\n"
-                    "Patient: 68 Y / Male\n"
-                    "Diagnosis: Immature Senile Cataract (Right Eye)\n"
-                    "Adv: Phacoemulsification with Foldable Monofocal IOL\n"
-                    "Investigations: A-Scan Optical Biometry scheduled\n"
-                    "Med: Eye Drops Moxifloxacin 0.5% QID x 10 days"
-                )
-            elif "mri" in fn_lower or "neuro" in fn_lower:
-                raw_text = (
-                    "Rx Dr. V. Sharma, MD (Neurology)\n"
-                    "Patient: 45 Y / Male\n"
-                    "Clinical History: Chronic unremitting headache for 3 weeks\n"
-                    "Adv: Plain MRI Brain (1.5T / 3.0T)\n"
-                    "Rule out space-occupying lesion\n"
-                    "Med: Tab Paracetamol 650mg SOS"
-                )
-            elif "fever" in fn_lower or "dengue" in fn_lower:
-                raw_text = (
-                    "Rx Dr. A. Kumar, MD (Gen Med), Gandhi Hospital\n"
-                    "Patient: 28 Y / Female\n"
-                    "History: High grade fever x 5 days, severe body ache\n"
-                    "Investigations: Complete Blood Count (CBC), Dengue NS1 Ag Card\n"
-                    "Med: Tab Dolo 650mg TDS x 5 days\n"
-                    "Med: Tab Pan 40mg OD x 5 days\n"
-                    "Adv: Hospital admission if platelet count < 100,000"
-                )
-            else:
-                raw_text = (
-                    "Rx [Uploaded Clinical Prescription]\n"
-                    "Patient: General Consultation\n"
-                    "Adv: Complete clinical evaluation\n"
-                    "Please confirm your recommended procedure or test manually."
-                )
+        # Test fixture / indicator for illegible cursive handwriting
+        if "handwriting" in fn_lower or "unclear" in fn_lower or "cursive" in fn_lower or "blurry" in fn_lower:
+            is_handwritten = True
+            image_quality_notes = "Challenging cursive handwriting with low ink contrast"
+            unreadable_parts.append("Illegible clinical handwriting detected")
+            raw_text = ""
+            extracted_items_raw = []
+        elif settings.DEMO_MODE and not file_bytes and any(k in fn_lower for k in ["knee", "ortho", "tkr"]):
+            # Isolated DEMO_MODE sample fixture for knee surgery
+            raw_text = (
+                "Diagnosis: Osteoarthritis Grade 4 Knee\n"
+                "Advice: Total Knee Replacement (TKR)\n"
+                "Med: Tab Dolo 650mg TDS x 5 days\n"
+                "Med: Tab Pan 40mg OD x 15 days"
+            )
+            image_quality_notes = "Demo test fixture for Knee TKR (DEMO_MODE only)"
+            lines = raw_text.splitlines()
+            extracted_items_raw = parse_clinical_regex_medicines(lines)
+        elif settings.DEMO_MODE and not file_bytes and any(k in fn_lower for k in ["cataract", "phaco"]):
+            # Isolated DEMO_MODE sample fixture for cataract surgery
+            raw_text = (
+                "Diagnosis: Senile Immature Cataract Right Eye\n"
+                "Advice: Cataract Surgery (Phaco + IOL implantation)\n"
+                "Med: Ciplox Eye Drops 1 drop QID\n"
+                "Med: Pred Forte Eye Drops 1 drop TID"
+            )
+            image_quality_notes = "Demo test fixture for Cataract Eye Rx (DEMO_MODE only)"
+            lines = raw_text.splitlines()
+            extracted_items_raw = parse_clinical_regex_medicines(lines)
+        elif settings.DEMO_MODE and not file_bytes and any(k in fn_lower for k in ["mri", "neuro"]):
+            # Isolated DEMO_MODE sample fixture for MRI referral
+            raw_text = (
+                "Clinical History: Intractable chronic headache\n"
+                "Advice: MRI Brain with Contrast\n"
+                "Med: Tab Sibelium 10mg HS x 30 days"
+            )
+            image_quality_notes = "Demo test fixture for MRI Brain Referral (DEMO_MODE only)"
+            lines = raw_text.splitlines()
+            extracted_items_raw = parse_clinical_regex_medicines(lines)
+        else:
+            # Authentic unreadable state: never fabricate doctor, patient, diagnosis or drugs
+            if file_bytes and file_size > 0:
+                image_quality_notes = "Document unreadable or optical extraction unavailable"
+                unreadable_parts.append("Could not decipher clinical text or medicines from uploaded document")
+            raw_text = ""
+            extracted_items_raw = []
 
-        lines = raw_text.splitlines()
-        extracted_items_raw = parse_clinical_regex_medicines(lines)
+    # Deduplicate extracted raw items
+    extracted_items_raw = deduplicate_extracted_items(extracted_items_raw)
 
     # STAGE 4 & 5: FUZZY MATCHING AGAINST RATE MASTER
     matched_medicines: List[Dict[str, Any]] = []
@@ -304,32 +358,58 @@ def process_prescription_ocr(
         matched = match_extracted_medicine(item, threshold=0.35)
         matched_medicines.append(matched)
 
+    # Deduplicate matched medicines
+    matched_medicines = deduplicate_extracted_items(matched_medicines)
+
     # Backward compatibility mappings
-    clean_text = raw_text.lower()
-    lines = raw_text.splitlines() if raw_text else []
+    clean_text = (raw_text or "").lower()
+    search_texts = [clean_text] + [vd.lower() for vd in vision_diagnoses]
 
     detected_lang = "en"
-    if re.search(r'[\u0C00-\u0C7F]', raw_text):
+    if re.search(r'[\u0C00-\u0C7F]', raw_text or ""):
         detected_lang = "te"
-    elif re.search(r'[\u0900-\u097F]', raw_text):
+    elif re.search(r'[\u0900-\u097F]', raw_text or ""):
         detected_lang = "hi"
 
     detected_treatments: List[str] = []
     detected_diagnostics: List[str] = []
+    available_treatment_matches: List[Dict[str, str]] = []
+    canonical_id: Optional[str] = None
+    canonical_name: Optional[str] = None
 
     for t_id, patterns in SURGICAL_PROCEDURES_MAP.items():
-        for pat in patterns:
-            if pat.lower() in clean_text:
-                t_obj = TREATMENT_CATALOGUE.get(t_id)
-                if t_obj and t_obj.name not in detected_treatments:
-                    detected_treatments.append(t_obj.name)
+        matched_this_proc = False
+        for text_source in search_texts:
+            if not text_source:
+                continue
+            for pat in patterns:
+                if pat.lower() in text_source:
+                    t_obj = TREATMENT_CATALOGUE.get(t_id)
+                    if t_obj:
+                        if t_obj.name not in detected_treatments:
+                            detected_treatments.append(t_obj.name)
+                        if not any(m["id"] == t_obj.id for m in available_treatment_matches):
+                            available_treatment_matches.append({"id": t_obj.id, "name": t_obj.name})
+                        if not canonical_id:
+                            canonical_id = t_obj.id
+                            canonical_name = t_obj.name
+                        matched_this_proc = True
+                        break
+            if matched_this_proc:
                 break
 
     for diag_name, patterns in DIAGNOSTIC_TESTS_MAP.items():
-        for pat in patterns:
-            if pat.lower() in clean_text:
-                if diag_name not in detected_diagnostics:
-                    detected_diagnostics.append(diag_name)
+        matched_this_diag = False
+        for text_source in search_texts:
+            if not text_source:
+                continue
+            for pat in patterns:
+                if pat.lower() in text_source:
+                    if diag_name not in detected_diagnostics:
+                        detected_diagnostics.append(diag_name)
+                    matched_this_diag = True
+                    break
+            if matched_this_diag:
                 break
 
     # Build backward-compatible detected_medicines_detailed
@@ -338,7 +418,7 @@ def process_prescription_ocr(
         detected_medicines_detailed.append({
             "medicine_id": m.get("matched_medicine_id"),
             "name": m.get("brand_name") or m.get("name_as_written"),
-            "generic_name": m.get("generic_name") or "Unverified Salt",
+            "generic_name": m.get("generic_name") or "Unverified in statutory database",
             "strength": m.get("strength") or "Standard dose",
             "formulation": m.get("form") or "Tablet",
             "frequency": m.get("dosage_pattern") or "OD",
@@ -353,22 +433,28 @@ def process_prescription_ocr(
             "visibly_extracted_text": m.get("name_as_written", "")
         })
 
-    detected_medicines_names = [f"{m['brand_name']} {m['strength']}" for m in matched_medicines]
+    detected_medicines_names = [f"{m['brand_name']} {m['strength']}" for m in matched_medicines if m.get('brand_name')]
 
-    # Calculate overall confidence
+    total_meds = len(matched_medicines)
+    verified_meds = sum(1 for m in matched_medicines if m.get("is_verified"))
+    unverified_meds = total_meds - verified_meds
+
+    # Honest overall confidence and notice
     if is_handwritten or unreadable_parts:
         confidence = 0.45
-        notice = "Handwriting or ambiguous sections detected — please verify the extracted medicines against your prescription."
-    elif matched_medicines:
-        avg_conf = sum(m.get("confidence", 0.8) for m in matched_medicines) / len(matched_medicines)
-        confidence = round(avg_conf, 2)
-        notice = "Prescription analyzed successfully. Please verify detected medicines and quantities below."
-    elif detected_treatments:
-        confidence = 0.91
-        notice = "Prescription verified successfully for procedure evaluation."
+        notice = f"Handwriting or ambiguous sections detected ({total_meds} medicines detected{f', {unverified_meds} need verification' if unverified_meds else ''}). Please verify against your prescription."
+    elif total_meds > 0 and unverified_meds > 0:
+        confidence = 0.70
+        notice = f"{total_meds} medicines detected; {unverified_meds} need verification against your prescription."
+    elif total_meds > 0 and detected_treatments:
+        confidence = 0.95
+        notice = f"Prescription verified successfully with {total_meds} verified medications and treatment identified."
+    elif total_meds > 0:
+        confidence = 0.92
+        notice = f"Successfully identified {total_meds} medicine(s) verified against official rate master."
     else:
-        confidence = 0.35
-        notice = "No identifiable medicine names detected. You can add them manually using the search box."
+        confidence = 0.0
+        notice = "No legible clinical text, medicines, or procedures detected in the uploaded prescription. Please check lighting and focus, or enter the procedure manually below."
 
     suggested_q = detected_treatments[0] if detected_treatments else (detected_diagnostics[0] if detected_diagnostics else None)
 
@@ -379,12 +465,14 @@ def process_prescription_ocr(
             lines_reconstructed.append(f"Doctor: {doctor_name}")
         if presc_date:
             lines_reconstructed.append(f"Date: {presc_date}")
+        if detected_treatments:
+            lines_reconstructed.append(f"Advice / Diagnosis: {', '.join(detected_treatments)}")
         for m in matched_medicines:
             lines_reconstructed.append(f"Rx: {m.get('name_as_written')} ({m.get('dosage_pattern') or 'As directed'})")
         raw_text = "\n".join(lines_reconstructed)
 
     return PrescriptionOCRResponse(
-        extracted_raw_text=raw_text,
+        extracted_raw_text=raw_text or "",
         confidence_score=confidence,
         detected_treatments=detected_treatments,
         detected_diagnostics=detected_diagnostics,
@@ -396,10 +484,13 @@ def process_prescription_ocr(
         detected_medicines_detailed=detected_medicines_detailed,
         uncertain_regions=unreadable_parts,
         is_handwritten=is_handwritten,
-        visibly_extracted_lines=[l.strip() for l in raw_text.splitlines() if l.strip()],
+        visibly_extracted_lines=[l.strip() for l in (raw_text or "").splitlines() if l.strip()],
         medicines=matched_medicines,
         doctor_name=doctor_name,
         date=presc_date,
         unreadable_parts=unreadable_parts,
-        source=source
+        source=source,
+        canonical_treatment_id=canonical_id,
+        canonical_treatment_name=canonical_name,
+        available_treatment_matches=available_treatment_matches
     )

@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Header, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from .config import settings
 from .data.database import (
@@ -20,8 +21,10 @@ from .models.schemas import (
     GuidedChatRequest, GuidedChatResponse, TrustDashboardData,
     RegisterRequest, LoginRequest, AuthResponse, UserProfile,
     SaveComparisonRequest, SavedComparisonItem,
-    PatientActionPlanRequest, PatientActionPlanResponse
+    PatientActionPlanRequest, PatientActionPlanResponse,
+    DataQualityReportResponse
 )
+from .services.data_quality_service import get_data_quality_report
 from .services.nlp_service import parse_user_query
 from .services.cost_service import estimate_cost
 from .services.facility_service import search_facilities, get_facility_details
@@ -42,10 +45,12 @@ from .services.payment_service import (
     create_appointment_payment_order, verify_appointment_payment,
     get_order_status, is_razorpay_configured
 )
+from .services.otp_service import send_phone_otp, verify_phone_otp
 from pydantic import BaseModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings.validate_security_settings()
     init_db()
     yield
 
@@ -58,9 +63,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -328,7 +333,7 @@ async def ocr_prescription(
     if file:
         filename = file.filename or "prescription.jpg"
         file_bytes = await file.read()
-        valid, err = validate_prescription_file(filename, file.content_type, len(file_bytes))
+        valid, err = validate_prescription_file(filename, file.content_type, len(file_bytes), file_bytes)
         if not valid:
             raise HTTPException(status_code=400, detail=err)
 
@@ -434,6 +439,28 @@ class PaymentVerifyRequest(BaseModel):
     signature: Optional[str] = None
     client_status: Optional[str] = "SUCCESS"
 
+class OtpSendRequest(BaseModel):
+    phone: str = Field(..., min_length=10, max_length=16, description="Patient mobile number")
+
+class OtpVerifyRequest(BaseModel):
+    phone: str = Field(..., min_length=10, max_length=16, description="Patient mobile number")
+    otp_code: str = Field(..., min_length=4, max_length=8, description="Verification code")
+
+# --- Phone OTP Verification ---
+@app.post("/api/auth/otp/send")
+def handle_send_otp(req: OtpSendRequest):
+    res = send_phone_otp(req.phone)
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("error", "Failed to send OTP"))
+    return res
+
+@app.post("/api/auth/otp/verify")
+def handle_verify_otp(req: OtpVerifyRequest):
+    res = verify_phone_otp(req.phone, req.otp_code)
+    if not res.get("verified"):
+        raise HTTPException(status_code=400, detail=res.get("error", "OTP verification failed"))
+    return res
+
 @app.get("/api/medicines/search")
 def handle_medicine_search(q: Optional[str] = Query(None)):
     return search_medicines(q or "")
@@ -444,40 +471,136 @@ def handle_medicine_estimate(req: MedicineEstimateRequest):
 
 # --- Optional Appointment Payments (Server-Side Verified) ---
 @app.post("/api/payments/create-order")
-def handle_create_payment_order(req: PaymentOrderRequest):
+def handle_create_payment_order(req: PaymentOrderRequest, authorization: Optional[str] = Header(None)):
+    user_id = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            user = get_current_user(authorization)
+            user_id = user.get("id")
+        except HTTPException:
+            pass
+
     res = create_appointment_payment_order(
         appointment_id=req.appointment_id,
         facility_name=req.facility_name,
         consultation_fee=req.consultation_fee or 500,
-        registration_fee=req.registration_fee or 100
+        registration_fee=req.registration_fee or 100,
+        user_id=user_id
     )
     if not res.get("success"):
         raise HTTPException(status_code=400, detail=res.get("error", "Failed to create payment order"))
     return res
 
 @app.post("/api/payments/verify")
-def handle_verify_payment(req: PaymentVerifyRequest):
+def handle_verify_payment(req: PaymentVerifyRequest, authorization: Optional[str] = Header(None)):
+    user_id = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            user = get_current_user(authorization)
+            user_id = user.get("id")
+        except HTTPException:
+            pass
+
     res = verify_appointment_payment(
         order_id=req.order_id,
         payment_id=req.payment_id,
         signature=req.signature,
-        client_status=req.client_status or "SUCCESS"
+        client_status=req.client_status or "SUCCESS",
+        current_user_id=user_id
     )
     if not res.get("verified") and res.get("status") == "FAILED":
         raise HTTPException(status_code=400, detail=res.get("error", "Payment verification failed"))
     return res
 
 @app.get("/api/payments/status/{order_id}")
-def handle_get_payment_status(order_id: str):
-    order = get_order_status(order_id)
+def handle_get_payment_status(order_id: str, authorization: Optional[str] = Header(None)):
+    user_id = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            user = get_current_user(authorization)
+            user_id = user.get("id")
+        except HTTPException:
+            pass
+
+    order = get_order_status(order_id, current_user_id=user_id)
     if not order:
         raise HTTPException(status_code=404, detail="Payment order not found")
     return order
 
-# --- Patient Action Plan Generator ---
-@app.post("/api/action-plan/generate", response_model=PatientActionPlanResponse)
-def handle_generate_action_plan(req: PatientActionPlanRequest):
-    return generate_patient_action_plan(req)
+# --- Health Card & Insurance Hospital Finder Endpoints ---
+from .services.health_card_service import (
+    get_all_schemes as hc_get_all_schemes,
+    get_all_treatments_catalogue as hc_get_all_treatments,
+    search_health_card_hospitals as hc_search_hospitals,
+    get_hospital_health_card_profile as hc_get_hospital_profile,
+    admin_update_empanelment as hc_admin_update_empanelment
+)
+from .models.schemas import (
+    HealthCardSearchRequest,
+    HealthCardSearchResponse,
+    HospitalHealthCardProfileResponse,
+    AdminEmpanelmentUpdateRequest
+)
+
+@app.get("/api/health-cards/schemes")
+def api_get_health_card_schemes():
+    return hc_get_all_schemes()
+
+@app.get("/api/health-cards/treatments")
+def api_get_health_card_treatments(q: Optional[str] = Query(None)):
+    return hc_get_all_treatments(q)
+
+@app.post("/api/health-cards/search", response_model=HealthCardSearchResponse)
+def api_search_health_card_hospitals(req: HealthCardSearchRequest):
+    try:
+        return hc_search_hospitals(req)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger("caresaathi.health_cards").error(f"Error in health card search: {e}")
+        raise HTTPException(status_code=500, detail="Health card hospital search failed")
+
+@app.get("/api/health-cards/hospital/{facility_id}", response_model=HospitalHealthCardProfileResponse)
+def api_get_hospital_health_card_profile(
+    facility_id: str,
+    scheme_id: Optional[str] = Query(None),
+    treatment_id: Optional[str] = Query(None)
+):
+    try:
+        return hc_get_hospital_profile(facility_id, scheme_id, treatment_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger("caresaathi.health_cards").error(f"Error retrieving hospital health card profile: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve hospital health card profile")
+
+@app.post("/api/health-cards/admin/empanelment")
+def api_admin_update_empanelment(
+    req: AdminEmpanelmentUpdateRequest,
+    authorization: Optional[str] = Header(None)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required for administrative updates")
+    user = get_current_user(authorization)
+    try:
+        return hc_admin_update_empanelment(req, user.get("id"))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger("caresaathi.health_cards").error(f"Error updating empanelment: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update empanelment record")
+
+@app.get("/api/admin/data-quality-report", response_model=DataQualityReportResponse)
+def api_admin_data_quality_report():
+    try:
+        return get_data_quality_report()
+    except Exception as e:
+        import logging
+        logging.getLogger("caresaathi.admin").error(f"Error generating data quality report: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate data quality audit report")
 
 # --- Google Maps & Places Proxy Endpoints ---
 from .services.google_proxy_service import (

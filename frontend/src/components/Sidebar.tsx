@@ -17,6 +17,7 @@ import {
   LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  CreditCard,
   Calculator,
   ChevronRight
 } from 'lucide-react';
@@ -62,6 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'dashboard', label: t('navDashboard'), icon: Search },
     { id: 'estimate', label: t('navEstimate'), icon: Calculator },
     { id: 'hospitals', label: t('navFindHospitals'), icon: MapPin },
+    { id: 'health-cards', label: t('navHealthCards'), icon: CreditCard },
     { id: 'schemes', label: t('navFinancialSupport'), icon: FileText },
     { id: 'methodology', label: t('navHowItWorks'), icon: HelpCircle },
   ];
