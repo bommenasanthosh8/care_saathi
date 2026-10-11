@@ -8,3 +8,4 @@ pyjwt>=2.8.0
 google-genai
 python-dotenv
 Pillow
+   pillow-heif
