@@ -154,8 +154,13 @@ def get_all_treatments_catalogue(search_query: Optional[str] = None) -> List[Dic
     """
     clean_q = search_query.strip().lower() if search_query else None
     results = []
+    seen_ids = set()
 
     for t_id, t in TREATMENT_CATALOGUE.items():
+        if t.id in seen_ids:
+            continue
+        seen_ids.add(t.id)
+
         if clean_q:
             matches_name = clean_q in t.name.lower()
             matches_category = clean_q in t.category.lower()

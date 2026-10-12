@@ -276,8 +276,7 @@ TREATMENT_CATALOGUE: Dict[str, Treatment] = {
     )
 }
 
-# Alias for cataract shorthand
-TREATMENT_CATALOGUE["cataract"] = TREATMENT_CATALOGUE["cataract_surgery"]
+# Aliases and normalization are resolved dynamically via normalize_treatment_query
 
 def normalize_treatment_query(query: str) -> Optional[Treatment]:
     """

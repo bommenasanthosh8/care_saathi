@@ -309,11 +309,11 @@ export const CareCore3D: React.FC<CareCore3DProps> = ({
     // 11. Animation Loop
     // --------------------------------------------------------------------------
     let animationFrameId: number;
-    const clock = new THREE.Clock();
+    const startTime = performance.now();
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
-      const elapsedTime = clock.getElapsedTime();
+      const elapsedTime = (performance.now() - startTime) * 0.001;
 
       // Smooth mouse lerp
       mousePos.current.x = THREE.MathUtils.lerp(mousePos.current.x, mousePos.current.targetX, 0.05);

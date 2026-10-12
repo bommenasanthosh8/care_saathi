@@ -548,7 +548,8 @@ export const LivingHeart3D: React.FC<LivingHeart3DProps> = ({
     // 8. Animation Loop
     // --------------------------------------------------------------------------
     let animationFrameId: number;
-    let clock = new THREE.Clock();
+    let startTime = performance.now();
+    let lastTime = performance.now();
     let ringProgress1 = 0;
     let ringProgress2 = 0.5;
 
@@ -557,8 +558,10 @@ export const LivingHeart3D: React.FC<LivingHeart3DProps> = ({
 
       if (!isVisibleRef.current) return;
 
-      const delta = clock.getDelta();
-      const time = clock.getElapsedTime();
+      const now = performance.now();
+      const delta = Math.min((now - lastTime) * 0.001, 0.1);
+      lastTime = now;
+      const time = (now - startTime) * 0.001;
 
       // Damped pointer parallax
       mousePos.current.x += (mousePos.current.targetX - mousePos.current.x) * 0.05;
